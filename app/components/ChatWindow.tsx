@@ -90,7 +90,6 @@ const VoiceNote = memo(({ url, fromMe, duration }: { url: string; fromMe: boolea
           setProgress(0)
         }}
       />
-
       <button
         onClick={toggle}
         className={`w-8 h-8 rounded-full flex items-center justify-center ${
@@ -99,128 +98,90 @@ const VoiceNote = memo(({ url, fromMe, duration }: { url: string; fromMe: boolea
       >
         {playing ? <Pause size={14} /> : <Play size={14} />}
       </button>
-
       <div className="flex-1">
         <div className="h-1 rounded-full bg-black/10 overflow-hidden">
           <div
-            className={`h-full ${
-              fromMe ? 'bg-indigo-300' : 'bg-gray-500'
-            }`}
-            style={{
-              width: `${progress}%`,
-            }}
+            className={`h-full ${fromMe ? 'bg-indigo-300' : 'bg-gray-500'}`}
+            style={{ width: `${progress}%` }}
           />
         </div>
-
-        <p className="text-[10px] text-gray-500 mt-1">
-          {formatTime(duration)}
-        </p>
+        <p className="text-[10px] text-gray-500 mt-1">{formatTime(duration)}</p>
       </div>
     </div>
   )
 })
-
 VoiceNote.displayName = 'VoiceNote'
 
-const MessageBubble = memo(
-  ({
-    msg,
-    currentUserId,
-  }: {
-    msg: Message
-    currentUserId: string
-  }) => {
-    const fromMe = msg.sender_id === currentUserId
+const MessageBubble = memo(({ msg, currentUserId }: { msg: Message; currentUserId: string }) => {
+  const fromMe = msg.sender_id === currentUserId
 
-    const time = new Date(msg.created_at).toLocaleTimeString([], {
-      hour: '2-digit',
-      minute: '2-digit',
-    })
+  const time = new Date(msg.created_at).toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+  })
 
-    return (
+  return (
+    <div className={`flex ${fromMe ? 'justify-end' : 'justify-start'} mb-2`}>
       <div
-        className={`flex ${
-          fromMe ? 'justify-end' : 'justify-start'
-        } mb-2`}
+        className={`max-w-[75%] rounded-2xl px-3 py-2 shadow-sm ${
+          fromMe
+            ? 'bg-indigo-600 text-white rounded-br-sm'
+            : 'bg-white text-gray-800 rounded-bl-sm border border-gray-100'
+        }`}
       >
-        <div
-          className={`max-w-[75%] rounded-2xl px-3 py-2 shadow-sm ${
-            fromMe
-              ? 'bg-indigo-600 text-white rounded-br-sm'
-              : 'bg-white text-gray-800 rounded-bl-sm border border-gray-100'
-          }`}
-        >
-          {msg.type === 'image' && msg.file_url && (
-            <img
-              src={msg.file_url}
-              alt="img"
-              className="rounded-xl mb-1 max-h-72 object-cover"
-            />
-          )}
+        {msg.type === 'image' && msg.file_url && (
+          <img
+            src={msg.file_url}
+            alt="img"
+            className="rounded-xl mb-1 max-h-72 object-cover"
+          />
+        )}
 
-          {msg.type === 'file' && msg.file_url && (
-            <a
-              href={msg.file_url}
-              target="_blank"
-              rel="noreferrer"
-              className={`flex items-center gap-3 rounded-xl p-3 ${
-                fromMe ? 'bg-white/10' : 'bg-gray-100'
-              }`}
-            >
-              <FileText size={20} className={fromMe ? 'text-white' : 'text-indigo-500'} />
-              <div>
-                <p className="text-xs font-medium">
-                  {msg.file_name}
-                </p>
-                <p className={`text-[10px] ${fromMe ? 'text-indigo-200' : 'text-gray-400'}`}>
-                  {msg.file_size}
-                </p>
-              </div>
-            </a>
-          )}
-
-          {msg.type === 'voice' && msg.file_url && (
-            <VoiceNote
-              url={msg.file_url}
-              fromMe={fromMe}
-              duration={msg.duration || 0}
-            />
-          )}
-
-          {msg.content && (
-            <p className="text-sm">
-              {msg.content}
-            </p>
-          )}
-
-          <div
-            className={`flex items-center gap-1 mt-1 ${
-              fromMe ? 'justify-end' : 'justify-start'
+        {msg.type === 'file' && msg.file_url && (
+          <a
+            href={msg.file_url}
+            target="_blank"
+            rel="noreferrer"
+            className={`flex items-center gap-3 rounded-xl p-3 ${
+              fromMe ? 'bg-white/10' : 'bg-gray-100'
             }`}
           >
-            <span className="text-[10px] opacity-70">
-              {time}
-            </span>
+            <FileText size={20} className={fromMe ? 'text-white' : 'text-indigo-500'} />
+            <div>
+              <p className="text-xs font-medium">{msg.file_name}</p>
+              <p className={`text-[10px] ${fromMe ? 'text-indigo-200' : 'text-gray-400'}`}>
+                {msg.file_size}
+              </p>
+            </div>
+          </a>
+        )}
 
-            {fromMe &&
-              (msg.read ? (
-                <CheckCheck size={12} />
-              ) : (
-                <Check size={12} />
-              ))}
-          </div>
+        {msg.type === 'voice' && msg.file_url && (
+          <VoiceNote url={msg.file_url} fromMe={fromMe} duration={msg.duration || 0} />
+        )}
+
+        {msg.content && <p className="text-sm">{msg.content}</p>}
+
+        <div className={`flex items-center gap-1 mt-1 ${fromMe ? 'justify-end' : 'justify-start'}`}>
+          <span className="text-[10px] opacity-70">{time}</span>
+          {fromMe && (msg.read ? <CheckCheck size={12} /> : <Check size={12} />)}
         </div>
       </div>
-    )
-  }
-)
-
+    </div>
+  )
+})
 MessageBubble.displayName = 'MessageBubble'
 
 const Avatar = ({ contact, size = 10 }: { contact: Contact; size?: number }) => {
   const sz = `w-${size} h-${size}`
   if (contact.avatar_url) {
-    return <img src={contact.avatar_url} alt={contact.name} className={`${sz} rounded-full object-cover flex-shrink-0`} />
+    return (
+      <img
+        src={contact.avatar_url}
+        alt={contact.name}
+        className={`${sz} rounded-full object-cover flex-shrink-0`}
+      />
+    )
   }
   const colors = ['bg-violet-500', 'bg-emerald-500', 'bg-rose-500', 'bg-amber-500', 'bg-indigo-500']
   const color = colors[contact.id.charCodeAt(0) % colors.length]
@@ -237,7 +198,10 @@ const ContactRow = memo(({ contact, active, lastMsg, onClick }: {
   lastMsg?: Message
   onClick: () => void
 }) => {
-  const time = lastMsg ? new Date(lastMsg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''
+  const time = lastMsg
+    ? new Date(lastMsg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : ''
+
   return (
     <button
       onClick={onClick}
@@ -247,14 +211,15 @@ const ContactRow = memo(({ contact, active, lastMsg, onClick }: {
     >
       <div className="relative flex-shrink-0">
         <Avatar contact={contact} size={11} />
-        {contact.online && <span className="absolute bottom-0 right-0 w-3 h-3 bg-green-400 rounded-full ring-2 ring-white" />}
+        {contact.online && (
+          <span className="absolute bottom-0 right-0 w-3 h-3 bg-green-400 rounded-full ring-2 ring-white" />
+        )}
         {!contact.isMutual && (
           <span className="absolute -top-1 -right-1 w-4 h-4 bg-amber-400 rounded-full flex items-center justify-center">
             <Lock size={8} className="text-white" />
           </span>
         )}
       </div>
-
       <div className="flex-1 min-w-0">
         <div className="flex items-center justify-between">
           <span className="text-sm font-medium text-gray-900 truncate">{contact.name}</span>
@@ -263,7 +228,8 @@ const ContactRow = memo(({ contact, active, lastMsg, onClick }: {
         <div className="flex items-center justify-between mt-0.5">
           {contact.isMutual ? (
             <span className="text-xs text-gray-400 truncate">
-              {lastMsg?.content || (lastMsg?.type === 'image' ? '📷 Photo' : lastMsg?.type === 'voice' ? '🎤 Voice' : '')}
+              {lastMsg?.content ||
+                (lastMsg?.type === 'image' ? '📷 Photo' : lastMsg?.type === 'voice' ? '🎤 Voice' : '')}
             </span>
           ) : (
             <span className="text-xs text-amber-500">Follow each other to chat</span>
@@ -281,7 +247,9 @@ const LockedChat = ({ contact }: { contact: Contact }) => (
       <Lock size={28} className="text-amber-500" />
     </div>
     <h2 className="text-base font-semibold text-gray-800 mb-1">Messaging locked</h2>
-    <p className="text-sm text-gray-500 mb-4">You and {contact.name} need to follow each other to chat.</p>
+    <p className="text-sm text-gray-500 mb-4">
+      You and {contact.name} need to follow each other to chat.
+    </p>
     <Link
       href={`/profile/${contact.id}`}
       className="flex items-center gap-2 px-4 py-2 rounded-2xl bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 transition"
@@ -290,12 +258,6 @@ const LockedChat = ({ contact }: { contact: Contact }) => (
     </Link>
   </div>
 )
-
-function formatBytes(bytes: number) {
-  if (bytes < 1024) return bytes + ' B'
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
-  return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
-}
 
 export default function ChatWindow() {
   const supabase = createClient()
@@ -386,9 +348,7 @@ export default function ChatWindow() {
 
     fetch()
 
-    if (channelRef.current) {
-      supabase.removeChannel(channelRef.current)
-    }
+    if (channelRef.current) supabase.removeChannel(channelRef.current)
 
     const channel = supabase
       .channel(`messages-${currentUserId}-${activeContact.id}`)
@@ -467,10 +427,18 @@ export default function ChatWindow() {
 
   return (
     <div className="flex h-full w-full min-w-0 bg-[#f0f2f5]">
-      <div className={`${showList ? 'flex' : 'hidden'} sm:flex flex-col w-full sm:w-[360px] bg-white border-r border-gray-200 flex-shrink-0`}>
+
+      {/* Contact list */}
+      <div
+        className={`${
+          showList ? 'flex' : 'hidden'
+        } sm:flex flex-col w-full sm:w-[360px] bg-white border-r border-gray-200 flex-shrink-0`}
+      >
         <div className="flex items-center justify-between px-4 py-4 border-b border-gray-100">
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-xl bg-indigo-600 flex items-center justify-center text-white text-xs font-bold">Hi</div>
+            <div className="w-8 h-8 rounded-xl bg-indigo-600 flex items-center justify-center text-white text-xs font-bold">
+              Hi
+            </div>
             <h1 className="text-lg font-semibold text-gray-900">Messages</h1>
           </div>
           <button className="text-gray-400 hover:text-gray-600 transition-colors">
@@ -520,28 +488,45 @@ export default function ChatWindow() {
         </div>
       </div>
 
-      <div className={`${!showList ? 'flex' : 'hidden'} sm:flex flex-col flex-1 min-w-0 h-full`}>
+      {/* Chat panel */}
+      <div
+        className={`${
+          !showList ? 'flex' : 'hidden'
+        } sm:flex flex-col flex-1 min-w-0 h-full`}
+      >
         {activeContact ? (
           <div className="flex flex-col h-full min-h-0">
-            <div className="flex items-center gap-3 px-4 py-3 bg-white border-b border-gray-200">
-              <button onClick={() => setShowList(true)} className="sm:hidden text-gray-600 mr-1">
+
+            {/* Header */}
+            <div className="flex items-center gap-3 px-4 py-3 bg-white border-b border-gray-200 flex-shrink-0">
+              <button
+                onClick={() => setShowList(true)}
+                className="sm:hidden text-gray-600 mr-1"
+              >
                 <ArrowLeft size={20} />
               </button>
 
               <div className="relative flex-shrink-0">
                 <Avatar contact={activeContact} size={10} />
-                {activeContact.online && <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-green-400 rounded-full ring-2 ring-white" />}
+                {activeContact.online && (
+                  <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-green-400 rounded-full ring-2 ring-white" />
+                )}
               </div>
 
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold text-gray-900 truncate">{activeContact.name}</p>
+                <p className="text-sm font-semibold text-gray-900 truncate">
+                  {activeContact.name}
+                </p>
                 <p className="text-xs">
-                  {isTyping
-                    ? <span className="text-indigo-500 font-medium">typing...</span>
-                    : activeContact.username
-                      ? <span className="text-gray-400">@{activeContact.username}</span>
-                      : <span className="text-gray-400">{activeContact.online ? 'Online' : 'Last seen recently'}</span>
-                  }
+                  {isTyping ? (
+                    <span className="text-indigo-500 font-medium">typing...</span>
+                  ) : activeContact.username ? (
+                    <span className="text-gray-400">@{activeContact.username}</span>
+                  ) : (
+                    <span className="text-gray-400">
+                      {activeContact.online ? 'Online' : 'Last seen recently'}
+                    </span>
+                  )}
                 </p>
               </div>
 
@@ -557,7 +542,8 @@ export default function ChatWindow() {
               <LockedChat contact={activeContact} />
             ) : (
               <>
-                <div className="flex-1 overflow-y-auto px-4 py-4 pb-20 sm:pb-4 bg-[#efeae2]">
+                {/* Messages scroll area */}
+                <div className="flex-1 overflow-y-auto min-h-0 px-4 py-4 bg-[#efeae2]">
                   {loadingMessages && (
                     <div className="flex justify-center py-8">
                       <div className="w-6 h-6 border-2 border-indigo-300 border-t-indigo-600 rounded-full animate-spin" />
@@ -572,7 +558,8 @@ export default function ChatWindow() {
                   <div ref={messagesEndRef} />
                 </div>
 
-                <div className="fixed bottom-0 left-0 right-0 sm:static sm:bottom-auto z-20 bg-[#f0f2f5] border-t border-gray-200 px-3 py-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)]">
+                {/* Input bar */}
+                <div className="sticky bottom-0 flex-shrink-0 bg-[#f0f2f5] border-t border-gray-200 px-3 py-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] z-20">
                   <div className="flex items-center gap-2 bg-white rounded-full px-3 py-2 shadow-sm">
                     <input
                       ref={inputRef}
@@ -584,7 +571,7 @@ export default function ChatWindow() {
                     />
                     <button
                       onClick={() => sendMessage()}
-                      className="p-2.5 rounded-full bg-indigo-600 text-white hover:bg-indigo-700 transition-all flex-shrink-0"
+                      className="p-2.5 rounded-full bg-indigo-600 text-white hover:bg-indigo-700 transition-all flex-shrink-0 disabled:opacity-40"
                       disabled={!input.trim()}
                     >
                       <Send size={16} />
@@ -597,7 +584,9 @@ export default function ChatWindow() {
         ) : (
           <div className="hidden sm:flex flex-col flex-1 items-center justify-center text-center px-8 bg-[#efeae2]">
             <div className="w-20 h-20 rounded-full bg-white flex items-center justify-center mb-4 shadow-sm">
-              <div className="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center text-white text-lg font-bold">Hi</div>
+              <div className="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center text-white text-lg font-bold">
+                Hi
+              </div>
             </div>
             <h2 className="text-base font-semibold text-gray-700 mb-1">Hi Messaging</h2>
             <p className="text-sm text-gray-400">Select a conversation to start</p>
