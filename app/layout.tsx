@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 })
 
 export const metadata: Metadata = {
-  title: 'Hi — Messaging',
+  title: 'Hello — Messaging',
   description: 'A modern messaging app',
 
   icons: {

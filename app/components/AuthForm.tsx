@@ -123,7 +123,7 @@ export default function AuthForm({ mode = 'login' }: AuthFormProps) {
     <div className="w-full max-w-md rounded-3xl bg-white p-8 shadow-xl dark:bg-[#18181b]">
       <div className="mb-8 text-center">
         <div className="inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-indigo-600 text-white text-xl font-bold mb-4">
-          Hi
+          Hello
         </div>
         <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
           {mode === 'login' ? 'Welcome back' : 'Create account'}

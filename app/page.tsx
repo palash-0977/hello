@@ -74,7 +74,7 @@ export default function Home() {
         </div>
 
         <h1 className="text-5xl font-bold tracking-wide text-white">
-          Hi
+          Hello
         </h1>
 
         <p className="text-sm tracking-[0.3em] text-zinc-500 uppercase">

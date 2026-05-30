@@ -17,7 +17,7 @@ export default function NoInternetScreen({ onRetry }: Props) {
       <div className="relative mb-6 h-24 w-24 animate-pulse">
         <Image
           src="/hello_icon.svg"
-          alt="Hi Logo"
+          alt="Hello Logo"
           fill
           priority
           className="object-contain"

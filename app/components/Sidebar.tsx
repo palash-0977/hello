@@ -26,6 +26,8 @@ export default function Sidebar() {
   const [avatar, setAvatar] = useState('')
   const [initial, setInitial] = useState('Y')
 
+  const isMessagesPage = pathname.startsWith('/messages')
+
   useEffect(() => {
     const load = async () => {
       const {
@@ -114,7 +116,6 @@ export default function Sidebar() {
       icon: UserSearch,
       label: 'Search',
     },
-
     {
       href: '/notifications',
       icon: Bell,
@@ -162,7 +163,6 @@ export default function Sidebar() {
         </Link>
 
         <nav className="flex flex-col items-center gap-2 flex-1">
-
           {navItems.map(
             ({
               href,
@@ -170,8 +170,7 @@ export default function Sidebar() {
               label,
               notification,
             }) => {
-              const active =
-                pathname === href
+              const active = pathname === href
 
               return (
                 <Link
@@ -203,52 +202,53 @@ export default function Sidebar() {
         <Avatar />
       </aside>
 
-      {/* Mobile Bottom Nav */}
-      <nav className="sm:hidden fixed bottom-0 left-0 right-0 h-16 border-t border-gray-200 bg-white flex items-center justify-around px-2 z-50">
+      {/* Mobile Bottom Nav — hidden on /messages so it doesn't overlap the chat input */}
+      {!isMessagesPage && (
+        <nav className="sm:hidden fixed bottom-0 left-0 right-0 h-16 border-t border-gray-200 bg-white flex items-center justify-around px-2 z-50">
 
-        {navItems.map(
-          ({
-            href,
-            icon: Icon,
-            label,
-            notification,
-          }) => {
-            const active =
-              pathname === href
+          {navItems.map(
+            ({
+              href,
+              icon: Icon,
+              label,
+              notification,
+            }) => {
+              const active = pathname === href
 
-            return (
-              <Link
-                key={href}
-                href={href}
-                className={`flex flex-col items-center justify-center gap-1 flex-1 ${
-                  active
-                    ? 'text-indigo-600'
-                    : 'text-gray-500'
-                }`}
-              >
-                <div className="relative">
-                  <Icon size={22} />
+              return (
+                <Link
+                  key={href}
+                  href={href}
+                  className={`flex flex-col items-center justify-center gap-1 flex-1 ${
+                    active
+                      ? 'text-indigo-600'
+                      : 'text-gray-500'
+                  }`}
+                >
+                  <div className="relative">
+                    <Icon size={22} />
 
-                  {notification && (
-                    <span className="absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-red-500 border-2 border-white" />
-                  )}
-                </div>
+                    {notification && (
+                      <span className="absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-red-500 border-2 border-white" />
+                    )}
+                  </div>
 
-                <span className="text-[10px] font-medium">
-                  {label}
-                </span>
-              </Link>
-            )
-          }
-        )}
+                  <span className="text-[10px] font-medium">
+                    {label}
+                  </span>
+                </Link>
+              )
+            }
+          )}
 
-        <div className="flex flex-col items-center justify-center gap-1 flex-1">
-          <Avatar size="md" />
-          <span className="text-[10px] font-medium text-gray-500">
-            You
-          </span>
-        </div>
-      </nav>
+          <div className="flex flex-col items-center justify-center gap-1 flex-1">
+            <Avatar size="md" />
+            <span className="text-[10px] font-medium text-gray-500">
+              You
+            </span>
+          </div>
+        </nav>
+      )}
     </>
   )
 }
