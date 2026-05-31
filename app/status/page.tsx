@@ -1,11 +1,11 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import { createClient } from '@/lib/supabaseClient'
 import Sidebar from '../components/Sidebar'
 import {
-  Plus, X, Eye, ChevronRight, Image as ImageIcon,
-  Type, Clock, CheckCheck, Trash2, EyeOff,
+  Plus, X, Eye, ChevronRight, Type, Clock, CheckCheck, Trash2, EyeOff,
+  Send, Pause,
 } from 'lucide-react'
 
 // ─── Types ────────────────────────────────────────────────────
@@ -13,9 +13,10 @@ type StatusItem = {
   id: string
   user_id: string
   content: string | null
-  image_url: string | null
-  type: 'text' | 'image'
+  type: 'text'
   bg_color: string
+  music_url: string | null
+  music_title: string | null
   created_at: string
   expires_at: string
   views: string[]
@@ -25,12 +26,29 @@ type StatusItem = {
     username: string | null
     avatar_url: string | null
   }
+  reactions: {
+    emoji: string
+    count: number
+    users: { id: string; full_name: string | null; username: string | null }[]
+  }[]
+  replies: {
+    id: string
+    sender_id: string
+    message: string
+    created_at: string
+    sender_profile: {
+      full_name: string | null
+      username: string | null
+      avatar_url: string | null
+    }
+  }[]
 }
 
 type GroupedStatus = {
   profile: StatusItem['profile']
   items: StatusItem[]
   seen: boolean
+  lastViewedIndex: number
 }
 
 // ─── Constants ────────────────────────────────────────────────
@@ -46,6 +64,8 @@ const TEXT_COLORS: Record<string, string> = {
   '#7b2d8b': '#ffe0ff', '#b5179e': '#fff0fa', '#d62828': '#fff0f0',
   '#023e8a': '#e0f0ff', '#212529': '#f8f9fa', '#343a40': '#f1f3f5',
 }
+
+const EMOJI_REACTIONS = ['❤️', '😂', '🔥', '😍', '👏', '😮']
 
 function timeAgo(dateStr: string) {
   const diff = Date.now() - new Date(dateStr).getTime()
@@ -106,6 +126,8 @@ function StatusViewer({
   onMarkViewed,
   onDeleted,
   onHideUser,
+  allGroups,
+  setAllGroups,
 }: {
   group: GroupedStatus
   onClose: () => void
@@ -113,41 +135,99 @@ function StatusViewer({
   onMarkViewed: (id: string) => void
   onDeleted: (id: string) => void
   onHideUser: (uid: string) => void
+  allGroups: GroupedStatus[]
+  setAllGroups: React.Dispatch<React.SetStateAction<GroupedStatus[]>>
 }) {
   const supabase = createClient()
-  const [idx, setIdx] = useState(0)
+  const [idx, setIdx] = useState(group.lastViewedIndex || 0)
   const [progress, setProgress] = useState(0)
   const [showViewers, setShowViewers] = useState(false)
-  // Map of uid → display name for viewer list
   const [viewerNames, setViewerNames] = useState<Record<string, string>>({})
   const [showMenu, setShowMenu] = useState(false)
+  const [isPaused, setIsPaused] = useState(false)
+  const [reactions, setReactions] = useState<StatusItem['reactions']>([])
+  const [showReactions, setShowReactions] = useState(false)
+  const [replyMessage, setReplyMessage] = useState('')
+  const [sendingReply, setSendingReply] = useState(false)
   const intervalRef = useRef<NodeJS.Timeout | null>(null)
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const pressHoldTimer = useRef<NodeJS.Timeout | null>(null)
   const item = group.items[idx]
   const DURATION = 5000
   const isOwn = group.profile.id === currentUserId
 
-  // Auto-advance progress bar
+  const currentGroupIndex = allGroups.findIndex(g => g.profile.id === group.profile.id)
+
   useEffect(() => {
     onMarkViewed(item.id)
     setProgress(0)
     setShowViewers(false)
-    intervalRef.current = setInterval(() => {
-      setProgress(p => {
-        if (p >= 100) {
-          if (idx < group.items.length - 1) setIdx(i => i + 1)
-          else onClose()
-          return 0
-        }
-        return p + (100 / (DURATION / 100))
-      })
-    }, 100)
-    return () => { if (intervalRef.current) clearInterval(intervalRef.current) }
-  }, [idx])
+    setShowReactions(false)
+    setIsPaused(false)
 
-  // ── Fetch viewer names when panel opens ──────────────────────
+    if (audioRef.current) {
+      audioRef.current.pause()
+      audioRef.current = null
+    }
+
+    if (item.music_url) {
+      audioRef.current = new Audio(item.music_url)
+      audioRef.current.loop = true
+      audioRef.current.play().catch(() => {})
+    }
+
+    intervalRef.current = setInterval(() => {
+      if (!isPaused) {
+        setProgress(p => {
+          if (p >= 100) {
+            handleNext()
+            return 0
+          }
+          return p + (100 / (DURATION / 100))
+        })
+      }
+    }, 100)
+
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current)
+      if (audioRef.current) {
+        audioRef.current.pause()
+        audioRef.current = null
+      }
+    }
+  }, [idx, item.id])
+
+  useEffect(() => {
+    const fetchReactions = async () => {
+      const { data } = await supabase
+        .from('status_reactions')
+        .select(`
+          emoji,
+          user_id,
+          profiles:user_id(id, full_name, username)
+        `)
+        .eq('status_id', item.id)
+
+      if (data) {
+        const grouped: Record<string, { count: number; users: any[] }> = {}
+        data.forEach((r: any) => {
+          if (!grouped[r.emoji]) grouped[r.emoji] = { count: 0, users: [] }
+          grouped[r.emoji].count++
+          grouped[r.emoji].users.push(r.profiles)
+        })
+        setReactions(Object.entries(grouped).map(([emoji, data]) => ({
+          emoji,
+          count: data.count,
+          users: data.users
+        })))
+      }
+    }
+    fetchReactions()
+  }, [item.id])
+
   useEffect(() => {
     if (!showViewers || !item.views?.length) return
-    const unknownIds = item.views.filter(uid => !viewerNames[uid])
+    const unknownIds = item.views.filter((uid: string) => !viewerNames[uid])
     if (!unknownIds.length) return
 
     supabase
@@ -166,7 +246,92 @@ function StatusViewer({
       })
   }, [showViewers, item.id])
 
-  // ── Delete current status item ───────────────────────────────
+  const handleNext = useCallback(() => {
+    if (idx < group.items.length - 1) {
+      setIdx(i => i + 1)
+    } else {
+      if (currentGroupIndex < allGroups.length - 1) {
+        const nextGroup = allGroups[currentGroupIndex + 1]
+        setAllGroups(prev => prev.map((g, i) => 
+          i === currentGroupIndex ? { ...g, lastViewedIndex: idx } : g
+        ))
+      } else {
+        onClose()
+      }
+    }
+  }, [idx, group.items.length, currentGroupIndex, allGroups, onClose, setAllGroups])
+
+  const handlePrev = useCallback(() => {
+    if (idx > 0) {
+      setIdx(i => i - 1)
+    } else if (currentGroupIndex > 0) {
+      const prevGroup = allGroups[currentGroupIndex - 1]
+      setAllGroups(prev => prev.map((g, i) => 
+        i === currentGroupIndex ? { ...g, lastViewedIndex: idx } : g
+      ))
+    }
+  }, [idx, currentGroupIndex, allGroups, setAllGroups])
+
+  useEffect(() => {
+    if (idx >= group.items.length) {
+      if (currentGroupIndex < allGroups.length - 1) {
+        const nextGroup = allGroups[currentGroupIndex + 1]
+        setAllGroups(prev => prev.map((g, i) => 
+          i === currentGroupIndex ? { ...g, lastViewedIndex: group.items.length - 1 } : g
+        ))
+        const event = new CustomEvent('statusNextUser', { detail: { groupIndex: currentGroupIndex + 1, lastIndex: group.items.length - 1 } })
+        window.dispatchEvent(event)
+      } else {
+        onClose()
+      }
+    }
+  }, [idx, group.items.length, currentGroupIndex, allGroups, onClose, setAllGroups])
+
+  const addReaction = async (emoji: string) => {
+    const existing = reactions.find(r => r.emoji === emoji)
+    if (existing && existing.users.some(u => u.id === currentUserId)) return
+
+    await supabase.from('status_reactions').insert({
+      status_id: item.id,
+      user_id: currentUserId,
+      emoji
+    })
+
+    setReactions(prev => {
+      const existingIdx = prev.findIndex(r => r.emoji === emoji)
+      if (existingIdx >= 0) {
+        const updated = [...prev]
+        updated[existingIdx] = {
+          ...updated[existingIdx],
+          count: updated[existingIdx].count + 1,
+          users: [...updated[existingIdx].users, { id: currentUserId, full_name: null, username: null }]
+        }
+        return updated
+      }
+      return [...prev, { emoji, count: 1, users: [{ id: currentUserId, full_name: null, username: null }] }]
+    })
+    setShowReactions(false)
+  }
+
+  const sendReply = async () => {
+    if (!replyMessage.trim()) return
+    setSendingReply(true)
+    try {
+      await supabase.from('status_replies').insert({
+        status_id: item.id,
+        sender_id: currentUserId,
+        receiver_id: group.profile.id,
+        message: replyMessage.trim()
+      })
+      setReplyMessage('')
+      alert('Reply sent!')
+    } catch (err) {
+      console.error(err)
+    } finally {
+      setSendingReply(false)
+    }
+  }
+
   const deleteItem = async () => {
     await supabase.from('statuses').delete().eq('id', item.id)
     onDeleted(item.id)
@@ -178,24 +343,40 @@ function StatusViewer({
     setShowMenu(false)
   }
 
-  const goNext = () => { if (idx < group.items.length - 1) setIdx(i => i + 1); else onClose() }
-  const goPrev = () => { if (idx > 0) setIdx(i => i - 1) }
+  const handlePressStart = () => {
+    pressHoldTimer.current = setTimeout(() => {
+      setIsPaused(true)
+      if (audioRef.current) audioRef.current.pause()
+    }, 500)
+  }
+
+  const handlePressEnd = () => {
+    if (pressHoldTimer.current) clearTimeout(pressHoldTimer.current)
+    setIsPaused(false)
+    if (audioRef.current && item.music_url) audioRef.current.play().catch(() => {})
+  }
 
   return (
-    <div className="fixed inset-0 z-50 bg-black flex flex-col">
-      {/* Progress bars */}
+    <div 
+      className="fixed inset-0 z-50 bg-black flex flex-col"
+      onPressStart={handlePressStart}
+      onPressEnd={handlePressEnd}
+      onMouseDown={handlePressStart}
+      onMouseUp={handlePressEnd}
+      onTouchStart={handlePressStart}
+      onTouchEnd={handlePressEnd}
+    >
       <div className="flex gap-1 px-3 pt-3 pb-1 z-10">
         {group.items.map((_, i) => (
           <div key={i} className="flex-1 h-0.5 rounded-full bg-white/30 overflow-hidden">
             <div
-              className="h-full bg-white rounded-full"
+              className="h-full bg-white rounded-full transition-all duration-100"
               style={{ width: i < idx ? '100%' : i === idx ? `${progress}%` : '0%' }}
             />
           </div>
         ))}
       </div>
 
-      {/* Header */}
       <div className="flex items-center gap-3 px-4 py-2 z-10">
         <UserAvatar profile={group.profile} size={10} />
         <div className="flex-1">
@@ -205,7 +386,13 @@ function StatusViewer({
           <p className="text-white/60 text-xs">{timeAgo(item.created_at)} · {expiresIn(item.expires_at)}</p>
         </div>
 
-        {/* ── Action menu button ── */}
+        {item.music_title && (
+          <div className="flex items-center gap-1 bg-white/20 backdrop-blur px-2 py-1 rounded-full">
+            <span className="text-white text-xs">🎵</span>
+            <span className="text-white text-xs truncate max-w-[100px]">{item.music_title}</span>
+          </div>
+        )}
+
         <div className="relative">
           <button
             onClick={() => setShowMenu(v => !v)}
@@ -249,28 +436,92 @@ function StatusViewer({
         </button>
       </div>
 
-      {/* Content */}
       <div className="flex-1 relative">
-        {item.type === 'image' && item.image_url ? (
-          <img src={item.image_url} alt="status" className="absolute inset-0 w-full h-full object-contain" />
-        ) : (
-          <div
-            className="absolute inset-0 flex items-center justify-center p-8"
-            style={{ backgroundColor: item.bg_color }}
+        <div
+          className="absolute inset-0 flex items-center justify-center p-8"
+          style={{ backgroundColor: item.bg_color }}
+        >
+          <p
+            className="text-center text-2xl font-bold leading-snug break-words max-w-full"
+            style={{ color: TEXT_COLORS[item.bg_color] || '#ffffff' }}
           >
-            <p
-              className="text-center text-2xl font-bold leading-snug"
-              style={{ color: TEXT_COLORS[item.bg_color] || '#ffffff' }}
-            >
-              {item.content}
-            </p>
-          </div>
-        )}
-        <button className="absolute left-0 top-0 w-1/3 h-full" onClick={goPrev} />
-        <button className="absolute right-0 top-0 w-1/3 h-full" onClick={goNext} />
+            {item.content}
+          </p>
+        </div>
+        
+        <button 
+          className="absolute left-0 top-0 w-1/3 h-full z-10" 
+          onClick={(e) => { e.stopPropagation(); handlePrev(); }}
+        />
+        <button 
+          className="absolute right-0 top-0 w-1/3 h-full z-10" 
+          onClick={(e) => { e.stopPropagation(); handleNext(); }}
+        />
       </div>
 
-      {/* Footer — views (only own) */}
+      <div className="px-4 py-2 z-10">
+        <button
+          onClick={() => setShowReactions(!showReactions)}
+          className="w-full flex items-center gap-2 bg-white/20 backdrop-blur px-4 py-2 rounded-full text-white"
+        >
+          <span>❤️</span>
+          <span className="text-sm">{reactions.reduce((a, b) => a + b.count, 0)} reactions</span>
+          <ChevronRight size={16} className={`ml-auto transition-transform ${showReactions ? 'rotate-90' : ''}`} />
+        </button>
+        
+        {showReactions && (
+          <div className="mt-2 bg-black/60 backdrop-blur rounded-2xl overflow-hidden">
+            <div className="flex gap-2 p-3 border-b border-white/10">
+              {EMOJI_REACTIONS.map(emoji => (
+                <button
+                  key={emoji}
+                  onClick={() => addReaction(emoji)}
+                  className="text-2xl hover:scale-125 transition-transform"
+                >
+                  {emoji}
+                </button>
+              ))}
+            </div>
+            
+            {reactions.length > 0 && (
+              <div className="max-h-32 overflow-y-auto">
+                {reactions.map(r => (
+                  <div key={r.emoji} className="flex items-center gap-2 px-3 py-2 border-b border-white/10">
+                    <span className="text-xl">{r.emoji}</span>
+                    <span className="text-white text-sm">{r.count}</span>
+                    <span className="text-white/50 text-xs ml-auto">
+                      {r.users.slice(0, 3).map(u => u.full_name || u.username || 'User').join(', ')}
+                      {r.users.length > 3 ? ` +${r.users.length - 3}` : ''}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      <div className="px-4 py-3 z-10">
+        <div className="flex items-center gap-2 bg-white/20 backdrop-blur rounded-full px-4 py-2">
+          <input
+            type="text"
+            value={replyMessage}
+            onChange={(e) => setReplyMessage(e.target.value)}
+            onKeyPress={(e) => e.key === 'Enter' && sendReply()}
+            placeholder="Reply to status..."
+            className="flex-1 bg-transparent text-white placeholder-white/50 outline-none text-sm"
+            disabled={sendingReply}
+          />
+          <button
+            onClick={sendReply}
+            disabled={!replyMessage.trim() || sendingReply}
+            className="text-white hover:text-indigo-400 disabled:opacity-40 transition"
+          >
+            <Send size={18} />
+          </button>
+        </div>
+      </div>
+
       {isOwn && (
         <div className="z-10">
           <button
@@ -284,10 +535,9 @@ function StatusViewer({
 
           {showViewers && item.views && item.views.length > 0 && (
             <div className="bg-black/60 backdrop-blur px-4 pb-4 max-h-40 overflow-y-auto">
-              {item.views.map(uid => (
+              {item.views.map((uid: string) => (
                 <div key={uid} className="flex items-center gap-2 py-2 border-b border-white/10">
                   <CheckCheck size={14} className="text-indigo-400" />
-                  {/* ── Name instead of raw ID ── */}
                   <span className="text-white/80 text-xs">
                     {viewerNames[uid] ?? 'Loading…'}
                   </span>
@@ -297,123 +547,212 @@ function StatusViewer({
           )}
         </div>
       )}
+      
+      {isPaused && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20">
+          <div className="bg-black/60 backdrop-blur rounded-full p-4">
+            <Pause size={32} className="text-white" />
+          </div>
+        </div>
+      )}
     </div>
   )
 }
 
-// ─── Compose Modal (unchanged) ────────────────────────────────
+// ─── Compose Modal (FIXED - text only, no music blocking) ────────────────────────────────
 function ComposeModal({ onClose, onPosted, userId }: {
   onClose: () => void
   onPosted: () => void
   userId: string
 }) {
   const supabase = createClient()
-  const [tab, setTab] = useState<'text' | 'image'>('text')
   const [text, setText] = useState('')
   const [bgColor, setBgColor] = useState(BG_COLORS[0])
-  const [imageFile, setImageFile] = useState<File | null>(null)
-  const [imagePreview, setImagePreview] = useState('')
+  const [musicFile, setMusicFile] = useState<File | null>(null)
+  const [musicTitle, setMusicTitle] = useState('')
   const [uploading, setUploading] = useState(false)
-  const fileRef = useRef<HTMLInputElement>(null)
-
-  const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    setImageFile(file)
-    setImagePreview(URL.createObjectURL(file))
-  }
+  const musicFileRef = useRef<HTMLInputElement>(null)
 
   const post = async () => {
-    if (tab === 'text' && !text.trim()) return
-    if (tab === 'image' && !imageFile) return
+    if (!text.trim()) return
     setUploading(true)
     const expires = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+    
+    let musicUrl = null
+    let musicTitleFinal = null
+    
     try {
-      if (tab === 'text') {
-        await supabase.from('statuses').insert({
-          user_id: userId, type: 'text', content: text.trim(),
-          bg_color: bgColor, expires_at: expires, views: [],
-        })
-      } else if (imageFile) {
-        const ext = imageFile.name.split('.').pop()
-        const path = `status/${userId}_${Date.now()}.${ext}`
-        const { error: upErr } = await supabase.storage.from('statuses').upload(path, imageFile, { upsert: false })
-        if (upErr) throw upErr
-        const { data: urlData } = supabase.storage.from('statuses').getPublicUrl(path)
-        await supabase.from('statuses').insert({
-          user_id: userId, type: 'image', image_url: urlData.publicUrl,
-          bg_color: '#000000', expires_at: expires, views: [],
-        })
+      // Upload music if exists
+      if (musicFile) {
+        const ext = musicFile.name.split('.').pop() || 'mp3'
+        const path = `status-music/${userId}_${Date.now()}.${ext}`
+        const { error: upErr } = await supabase.storage.from('status-music').upload(path, musicFile, { upsert: false })
+        if (upErr) {
+          console.error('Music upload error:', upErr)
+          // Continue without music if upload fails
+          musicUrl = null
+          musicTitleFinal = null
+        } else {
+          const { data: urlData } = supabase.storage.from('status-music').getPublicUrl(path)
+          musicUrl = urlData.publicUrl
+          musicTitleFinal = musicTitle || musicFile.name.replace(/\.[^/.]+$/, '')
+        }
       }
-      onPosted(); onClose()
-    } catch (err) { console.error(err) }
-    finally { setUploading(false) }
+      
+      // Insert status
+      const { error: insertError } = await supabase.from('statuses').insert({
+        user_id: userId, 
+        type: 'text', 
+        content: text.trim(),
+        bg_color: bgColor,
+        music_url: musicUrl,
+        music_title: musicTitleFinal,
+        expires_at: expires, 
+        views: [],
+      })
+      
+      if (insertError) {
+        console.error('Status insert error:', insertError)
+        alert('Failed to post status: ' + insertError.message)
+        setUploading(false)
+        return
+      }
+      
+      // Close modal and refresh
+      onPosted()
+      onClose()
+    } catch (err) {
+      console.error(err)
+      alert('Failed to post status')
+    } finally {
+      setUploading(false)
+    }
   }
 
   return (
     <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
-      <div className="bg-white dark:bg-zinc-900 rounded-t-3xl sm:rounded-3xl w-full sm:max-w-md shadow-2xl overflow-hidden">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 dark:border-zinc-800">
+      <div className="bg-white dark:bg-zinc-900 rounded-t-3xl sm:rounded-3xl w-full sm:max-w-md shadow-2xl overflow-hidden max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 dark:border-zinc-800 sticky top-0 bg-white dark:bg-zinc-900 z-10">
           <h2 className="text-base font-semibold text-gray-900 dark:text-white">New Status</h2>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"><X size={20} /></button>
         </div>
-        <div className="flex gap-2 px-5 pt-4">
-          {(['text', 'image'] as const).map(t => (
-            <button key={t} onClick={() => setTab(t)}
-              className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium transition ${tab === t ? 'bg-indigo-600 text-white' : 'bg-gray-100 dark:bg-zinc-800 text-gray-600 dark:text-gray-300'}`}>
-              {t === 'text' ? <Type size={14} /> : <ImageIcon size={14} />}
-              {t === 'text' ? 'Text' : 'Image'}
-            </button>
-          ))}
-        </div>
+        
         <div className="px-5 py-4">
-          {tab === 'text' ? (
-            <>
-              <div className="w-full h-48 rounded-2xl flex items-center justify-center mb-4 transition-colors" style={{ backgroundColor: bgColor }}>
-                <p className="text-center text-xl font-bold px-4 break-words" style={{ color: TEXT_COLORS[bgColor] || '#fff' }}>
-                  {text || 'Type something…'}
-                </p>
-              </div>
-              <textarea value={text} onChange={e => setText(e.target.value)} maxLength={200}
-                placeholder="What's on your mind?"
-                className="w-full rounded-2xl border border-gray-200 dark:border-zinc-700 bg-gray-50 dark:bg-zinc-800 px-4 py-3 text-sm text-gray-900 dark:text-white outline-none focus:border-indigo-400 resize-none h-20 mb-3" />
-              <p className="text-xs text-gray-400 mb-2">Background color</p>
-              <div className="flex flex-wrap gap-2 mb-4">
-                {BG_COLORS.map(c => (
-                  <button key={c} onClick={() => setBgColor(c)}
-                    className={`w-7 h-7 rounded-full transition-transform ${bgColor === c ? 'ring-2 ring-indigo-500 ring-offset-2 scale-110' : ''}`}
-                    style={{ backgroundColor: c }} />
-                ))}
-              </div>
-            </>
-          ) : (
-            <div className="mb-4">
-              {imagePreview ? (
-                <div className="relative w-full h-56 rounded-2xl overflow-hidden mb-3">
-                  <img src={imagePreview} alt="preview" className="w-full h-full object-cover" />
-                  <button onClick={() => { setImageFile(null); setImagePreview('') }}
-                    className="absolute top-2 right-2 bg-black/60 rounded-full p-1 text-white"><X size={14} /></button>
+          {/* Preview */}
+          <div className="w-full h-48 rounded-2xl flex items-center justify-center mb-4 transition-colors" style={{ backgroundColor: bgColor }}>
+            <p className="text-center text-xl font-bold px-4 break-words" style={{ color: TEXT_COLORS[bgColor] || '#fff' }}>
+              {text || 'Type something…'}
+            </p>
+          </div>
+          
+          {/* Text input */}
+          <textarea 
+            value={text} 
+            onChange={e => setText(e.target.value)} 
+            maxLength={200}
+            placeholder="What's on your mind?"
+            className="w-full rounded-2xl border border-gray-200 dark:border-zinc-700 bg-gray-50 dark:bg-zinc-800 px-4 py-3 text-sm text-gray-900 dark:text-white outline-none focus:border-indigo-400 resize-none h-20 mb-3" 
+          />
+          
+          {/* Music upload - FIXED with proper button */}
+          <div className="mb-4">
+            <p className="text-xs text-gray-400 mb-2">Add music (optional)</p>
+            {musicFile ? (
+              <div className="flex items-center gap-2 bg-gray-100 dark:bg-zinc-800 rounded-xl px-3 py-2">
+                <span className="text-lg">🎵</span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm text-gray-900 dark:text-white truncate">{musicTitle || musicFile.name}</p>
+                  <p className="text-xs text-gray-400">{(musicFile.size / 1024 / 1024).toFixed(2)} MB</p>
                 </div>
-              ) : (
-                <button onClick={() => fileRef.current?.click()}
-                  className="w-full h-56 rounded-2xl border-2 border-dashed border-gray-200 dark:border-zinc-700 flex flex-col items-center justify-center gap-2 text-gray-400 hover:border-indigo-400 transition">
-                  <ImageIcon size={32} /><span className="text-sm">Tap to choose image</span>
+                <button 
+                  onClick={() => { setMusicFile(null); setMusicTitle('') }}
+                  className="text-gray-400 hover:text-red-400 p-1"
+                >
+                  <X size={16} />
                 </button>
-              )}
-              <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleImageSelect} />
-            </div>
-          )}
+              </div>
+            ) : (
+              <button
+                onClick={() => musicFileRef.current?.click()}
+                className="w-full rounded-xl border-2 border-dashed border-gray-300 dark:border-zinc-700 py-3 text-sm text-gray-500 dark:text-gray-400 hover:border-indigo-400 hover:text-indigo-500 transition"
+              >
+                + Add music (optional)
+              </button>
+            )}
+            <input
+              ref={musicFileRef}
+              type="file"
+              accept="audio/*"
+              onChange={(e) => {
+                const file = e.target.files?.[0]
+                if (file) {
+                  setMusicFile(file)
+                  setMusicTitle('')
+                }
+              }}
+              className="hidden"
+            />
+            {musicFile && (
+              <input
+                type="text"
+                value={musicTitle}
+                onChange={(e) => setMusicTitle(e.target.value)}
+                placeholder="Music title (optional)"
+                className="w-full mt-2 rounded-xl border border-gray-200 dark:border-zinc-700 bg-gray-50 dark:bg-zinc-800 px-3 py-2 text-sm text-gray-900 dark:text-white outline-none focus:border-indigo-400"
+              />
+            )}
+          </div>
+          
+          {/* Background color */}
+          <p className="text-xs text-gray-400 mb-2">Background color</p>
+          <div className="flex flex-wrap gap-2 mb-4">
+            {BG_COLORS.map(c => (
+              <button key={c} onClick={() => setBgColor(c)}
+                className={`w-7 h-7 rounded-full transition-transform ${bgColor === c ? 'ring-2 ring-indigo-500 ring-offset-2 scale-110' : ''}`}
+                style={{ backgroundColor: c }} />
+            ))}
+          </div>
+          
           <div className="flex items-center gap-2 text-xs text-gray-400 mb-4">
             <Clock size={12} /><span>Status expires in 24 hours</span>
           </div>
-          <button onClick={post}
-            disabled={uploading || (tab === 'text' && !text.trim()) || (tab === 'image' && !imageFile)}
-            className="w-full rounded-2xl bg-indigo-600 py-3 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition">
+          
+          <button 
+            onClick={post}
+            disabled={uploading || !text.trim()}
+            className="w-full rounded-2xl bg-indigo-600 py-3 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition"
+          >
             {uploading ? 'Posting…' : 'Post Status'}
           </button>
         </div>
       </div>
     </div>
+  )
+}
+
+// ─── Status Group Row ─────────────────────────────────────────
+function StatusGroupRow({ group, onClick }: {
+  group: GroupedStatus
+  currentUserId: string
+  onClick: () => void
+}) {
+  const latest = group.items[0]
+  return (
+    <button
+      onClick={onClick}
+      className="w-full flex items-center gap-4 p-4 bg-white dark:bg-zinc-900 rounded-3xl border border-gray-100 dark:border-zinc-800 shadow-sm hover:border-indigo-200 dark:hover:border-indigo-700 transition text-left"
+    >
+      <UserAvatar profile={group.profile} size={14} ring seen={group.seen} />
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-semibold text-gray-900 dark:text-white truncate">
+          {group.profile.full_name || group.profile.username}
+        </p>
+        <p className="text-xs text-gray-400 mt-0.5">
+          {group.items.length} update{group.items.length > 1 ? 's' : ''} · {timeAgo(latest.created_at)}
+        </p>
+      </div>
+      <ChevronRight size={16} className="text-gray-300 dark:zinc-600 flex-shrink-0" />
+    </button>
   )
 }
 
@@ -428,7 +767,6 @@ export default function StatusPage() {
   const [loading, setLoading] = useState(true)
   const [showCompose, setShowCompose] = useState(false)
   const [viewingGroup, setViewingGroup] = useState<GroupedStatus | null>(null)
-  // ── Hidden user IDs (persisted in localStorage) ──────────────
   const [hiddenUsers, setHiddenUsers] = useState<Set<string>>(() => {
     if (typeof window === 'undefined') return new Set()
     try {
@@ -437,13 +775,24 @@ export default function StatusPage() {
     } catch { return new Set() }
   })
 
+  useEffect(() => {
+    const handleNextUser = (e: CustomEvent) => {
+      const { groupIndex } = e.detail
+      if (otherGroups[groupIndex]) {
+        setViewingGroup({ ...otherGroups[groupIndex], lastViewedIndex: 0 })
+      }
+    }
+    
+    window.addEventListener('statusNextUser' as any, handleNextUser as any)
+    return () => window.removeEventListener('statusNextUser' as any, handleNextUser as any)
+  }, [otherGroups])
+
   const hideUser = (uid: string) => {
     setHiddenUsers(prev => {
       const next = new Set(prev).add(uid)
       localStorage.setItem('status_hidden_users', JSON.stringify([...next]))
       return next
     })
-    // Also remove from current list immediately
     setOtherGroups(prev => prev.filter(g => g.profile.id !== uid))
   }
 
@@ -478,7 +827,7 @@ export default function StatusPage() {
     const { data: statusData } = await supabase
       .from('statuses')
       .select(`
-        id, user_id, content, image_url, type, bg_color, created_at, expires_at, views,
+        id, user_id, content, type, bg_color, music_url, music_title, created_at, expires_at, views,
         profile:profiles!statuses_user_id_fkey(id, full_name, username, avatar_url)
       `)
       .in('user_id', allIds)
@@ -493,9 +842,8 @@ export default function StatusPage() {
 
     for (const item of otherItems) {
       const uid = item.user_id
-      // ── Skip hidden users ──
       if (hiddenUsers.has(uid)) continue
-      if (!grouped[uid]) grouped[uid] = { profile: item.profile, items: [], seen: false }
+      if (!grouped[uid]) grouped[uid] = { profile: item.profile, items: [], seen: false, lastViewedIndex: 0 }
       grouped[uid].items.push(item)
       if (item.views?.includes(userId)) grouped[uid].seen = true
     }
@@ -515,7 +863,6 @@ export default function StatusPage() {
     await supabase.from('statuses').update({ views: [...views, currentUserId] }).eq('id', statusId)
   }
 
-  // ── Remove a deleted item from local state ───────────────────
   const handleDeleted = (deletedId: string) => {
     setMyStatuses(prev => prev.filter(s => s.id !== deletedId))
     setOtherGroups(prev =>
@@ -526,7 +873,7 @@ export default function StatusPage() {
   }
 
   const myGroup: GroupedStatus | null = myProfile
-    ? { profile: myProfile, items: myStatuses, seen: true }
+    ? { profile: myProfile, items: myStatuses, seen: true, lastViewedIndex: 0 }
     : null
 
   return (
@@ -536,7 +883,6 @@ export default function StatusPage() {
         <div className="mx-auto max-w-2xl">
           <h1 className="mb-5 text-2xl font-bold text-gray-900 dark:text-white">Status</h1>
 
-          {/* ── My Status ── */}
           <div className="mb-6">
             <div
               className="flex items-center gap-4 p-4 bg-white dark:bg-zinc-900 rounded-3xl border border-gray-100 dark:border-zinc-800 shadow-sm cursor-pointer hover:border-indigo-200 dark:hover:border-indigo-700 transition"
@@ -568,7 +914,6 @@ export default function StatusPage() {
             </div>
           </div>
 
-          {/* ── Others' Statuses ── */}
           {loading ? (
             <div className="bg-white dark:bg-zinc-900 rounded-3xl border border-gray-100 dark:border-zinc-800 p-6 text-center text-sm text-gray-400">
               Loading statuses…
@@ -582,7 +927,7 @@ export default function StatusPage() {
             <div>
               {otherGroups.filter(g => !g.seen).length > 0 && (
                 <>
-                  <p className="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-widest mb-3 px-1">Recent</p>
+                  <p className="text-xs font-semibold text-gray-400 dark:gray-500 uppercase tracking-widest mb-3 px-1">Recent</p>
                   <div className="space-y-2 mb-5">
                     {otherGroups.filter(g => !g.seen).map(group => (
                       <StatusGroupRow key={group.profile.id} group={group} currentUserId={currentUserId!} onClick={() => setViewingGroup(group)} />
@@ -592,7 +937,7 @@ export default function StatusPage() {
               )}
               {otherGroups.filter(g => g.seen).length > 0 && (
                 <>
-                  <p className="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-widest mb-3 px-1">Viewed</p>
+                  <p className="text-xs font-semibold text-gray-400 dark:gray-500 uppercase tracking-widest mb-3 px-1">Viewed</p>
                   <div className="space-y-2">
                     {otherGroups.filter(g => g.seen).map(group => (
                       <StatusGroupRow key={group.profile.id} group={group} currentUserId={currentUserId!} onClick={() => setViewingGroup(group)} />
@@ -621,34 +966,10 @@ export default function StatusPage() {
           onMarkViewed={markViewed}
           onDeleted={handleDeleted}
           onHideUser={hideUser}
+          allGroups={otherGroups}
+          setAllGroups={setOtherGroups}
         />
       )}
     </div>
-  )
-}
-
-// ─── Status Group Row ─────────────────────────────────────────
-function StatusGroupRow({ group, onClick }: {
-  group: GroupedStatus
-  currentUserId: string
-  onClick: () => void
-}) {
-  const latest = group.items[0]
-  return (
-    <button
-      onClick={onClick}
-      className="w-full flex items-center gap-4 p-4 bg-white dark:bg-zinc-900 rounded-3xl border border-gray-100 dark:border-zinc-800 shadow-sm hover:border-indigo-200 dark:hover:border-indigo-700 transition text-left"
-    >
-      <UserAvatar profile={group.profile} size={14} ring seen={group.seen} />
-      <div className="flex-1 min-w-0">
-        <p className="text-sm font-semibold text-gray-900 dark:text-white truncate">
-          {group.profile.full_name || group.profile.username}
-        </p>
-        <p className="text-xs text-gray-400 mt-0.5">
-          {group.items.length} update{group.items.length > 1 ? 's' : ''} · {timeAgo(latest.created_at)}
-        </p>
-      </div>
-      <ChevronRight size={16} className="text-gray-300 dark:text-zinc-600 flex-shrink-0" />
-    </button>
   )
 }
