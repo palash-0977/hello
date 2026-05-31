@@ -66,7 +66,7 @@ export default function Home() {
         <div className="relative h-28 w-28 animate-pulse">
           <Image
             src="/hello_icon.svg"
-            alt="Hi Logo"
+            alt="Hello Logo"
             fill
             priority
             className="object-contain"

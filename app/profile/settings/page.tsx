@@ -14,6 +14,7 @@ import {
   Camera,
   Save,
   ArrowLeft,
+  Palette,
 } from 'lucide-react'
 import Link from 'next/link'
 
@@ -22,29 +23,28 @@ export default function SettingsPage() {
   const router = useRouter()
 
   const [user, setUser] = useState<User | null>(null)
-
   const [fullName, setFullName] = useState('')
   const [bio, setBio] = useState('')
   const [avatarUrl, setAvatarUrl] = useState('')
-
   const [uploading, setUploading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
-
   const [darkMode, setDarkMode] = useState(false)
 
   useEffect(() => {
-    const loadTheme = localStorage.getItem('theme')
-
-    if (loadTheme === 'dark') {
+    // Apply stored theme on mount
+    const stored = localStorage.getItem('theme')
+    if (stored === 'dark') {
       document.documentElement.classList.add('dark')
       setDarkMode(true)
+    } else {
+      document.documentElement.classList.remove('dark')
+      setDarkMode(false)
     }
 
     const load = async () => {
       const { data: authData } = await supabase.auth.getUser()
       const currentUser = authData.user
-
       setUser(currentUser)
 
       if (currentUser) {
@@ -67,21 +67,19 @@ export default function SettingsPage() {
 
   const toggleTheme = () => {
     const html = document.documentElement
-
     if (darkMode) {
       html.classList.remove('dark')
       localStorage.setItem('theme', 'light')
+      setDarkMode(false)
     } else {
       html.classList.add('dark')
       localStorage.setItem('theme', 'dark')
+      setDarkMode(true)
     }
-
-    setDarkMode(!darkMode)
   }
 
   const uploadAvatar = async (file: File) => {
     if (!user) return
-
     setUploading(true)
     setError('')
 
@@ -98,17 +96,13 @@ export default function SettingsPage() {
       return
     }
 
-    const { data } = supabase.storage
-      .from('avatars')
-      .getPublicUrl(fileName)
-
+    const { data } = supabase.storage.from('avatars').getPublicUrl(fileName)
     setAvatarUrl(data.publicUrl)
     setUploading(false)
   }
 
   const saveProfile = async () => {
     if (!user) return
-
     setSaving(true)
     setError('')
 
@@ -136,8 +130,11 @@ export default function SettingsPage() {
     router.refresh()
   }
 
+  const inputClass =
+    'w-full rounded-2xl border border-gray-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-400 dark:text-white text-gray-900 transition'
+
   return (
-    <div className="min-h-dvh bg-gray-100 dark:bg-[#0f0f10] px-4 py-6 transition-colors duration-300">
+    <div className="min-h-dvh bg-gray-100 dark:bg-zinc-950 px-4 py-6 transition-colors duration-300">
       <div className="mx-auto max-w-2xl">
 
         {/* Top Bar */}
@@ -149,124 +146,130 @@ export default function SettingsPage() {
             <ArrowLeft size={18} />
             Back
           </Link>
-
-          <button
-            onClick={toggleTheme}
-            className="flex items-center gap-2 rounded-xl bg-white dark:bg-[#1c1c1f] px-4 py-2 shadow-sm border border-gray-200 dark:border-white/10"
-          >
-            {darkMode ? (
-              <>
-                <Sun size={18} />
-                <span className="text-sm">Light</span>
-              </>
-            ) : (
-              <>
-                <Moon size={18} />
-                <span className="text-sm">Dark</span>
-              </>
-            )}
-          </button>
         </div>
 
         {/* Settings Card */}
-        <div className="rounded-3xl bg-white dark:bg-[#18181b] border border-gray-200 dark:border-white/10 p-6 shadow-sm transition-colors duration-300">
+        <div className="rounded-3xl bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 p-6 shadow-sm transition-colors duration-300 space-y-6">
 
-          <div className="mb-6 flex items-center gap-3">
-            <div className="h-12 w-12 rounded-2xl bg-black text-white flex items-center justify-center dark:bg-white dark:text-black">
+          {/* Title */}
+          <div className="flex items-center gap-3">
+            <div className="h-12 w-12 rounded-2xl bg-indigo-600 text-white flex items-center justify-center">
               <User2 size={22} />
             </div>
-
             <div>
-              <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
-                Settings
-              </h1>
-              <p className="text-sm text-gray-500 dark:text-gray-400">
-                Manage your profile and account
-              </p>
+              <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Settings</h1>
+              <p className="text-sm text-gray-500 dark:text-gray-400">Manage your profile and account</p>
             </div>
           </div>
 
           {error && (
-            <div className="mb-4 rounded-2xl bg-red-100 text-red-600 p-3 text-sm">
+            <div className="rounded-2xl bg-red-100 dark:bg-red-900/20 text-red-600 dark:text-red-400 p-3 text-sm">
               {error}
             </div>
           )}
 
           {/* Avatar */}
-          <div className="mb-6 flex flex-col items-center">
+          <div className="flex flex-col items-center">
             <div className="relative">
               <img
-                src={
-                  avatarUrl ||
-                  'https://ui-avatars.com/api/?name=User'
-                }
+                src={avatarUrl || 'https://ui-avatars.com/api/?name=User'}
                 alt="Avatar"
-                className="h-28 w-28 rounded-full object-cover border-4 border-white dark:border-[#222]"
+                className="h-28 w-28 rounded-full object-cover border-4 border-white dark:border-zinc-800"
               />
-
-              <label className="absolute bottom-1 right-1 cursor-pointer rounded-full bg-black p-2 text-white shadow-lg">
+              <label className="absolute bottom-1 right-1 cursor-pointer rounded-full bg-indigo-600 p-2 text-white shadow-lg hover:bg-indigo-700 transition">
                 <Camera size={16} />
                 <input
                   type="file"
                   accept="image/*"
                   className="hidden"
-                  onChange={async (e) => {
+                  onChange={async e => {
                     const file = e.target.files?.[0]
                     if (file) await uploadAvatar(file)
                   }}
                 />
               </label>
             </div>
-
-            {uploading && (
-              <p className="mt-2 text-sm text-gray-400">
-                Uploading...
-              </p>
-            )}
+            {uploading && <p className="mt-2 text-sm text-gray-400">Uploading…</p>}
           </div>
 
           {/* Full Name */}
-          <div className="mb-4">
-            <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
-              Full Name
-            </label>
-
+          <div>
+            <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">Full Name</label>
             <input
               value={fullName}
-              onChange={(e) => setFullName(e.target.value)}
+              onChange={e => setFullName(e.target.value)}
               placeholder="Enter your name"
-              className="w-full rounded-2xl border border-gray-200 dark:border-white/10 bg-white dark:bg-[#101012] px-4 py-3 outline-none focus:ring-2 focus:ring-black dark:text-white"
+              className={inputClass}
             />
           </div>
 
           {/* Bio */}
-          <div className="mb-6">
-            <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
-              Bio
-            </label>
-
+          <div>
+            <label className="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">Bio</label>
             <textarea
               value={bio}
-              onChange={(e) => setBio(e.target.value)}
-              placeholder="Tell something about yourself..."
-              className="min-h-[120px] w-full resize-none rounded-2xl border border-gray-200 dark:border-white/10 bg-white dark:bg-[#101012] px-4 py-3 outline-none focus:ring-2 focus:ring-black dark:text-white"
+              onChange={e => setBio(e.target.value)}
+              placeholder="Tell something about yourself…"
+              className={`${inputClass} min-h-[100px] resize-none`}
             />
           </div>
 
-          {/* Save Button */}
+          {/* Save */}
           <button
             onClick={saveProfile}
             disabled={saving || uploading}
-            className="mb-4 flex w-full items-center justify-center gap-2 rounded-2xl bg-black px-4 py-3 font-semibold text-white hover:opacity-90 disabled:opacity-50"
+            className="flex w-full items-center justify-center gap-2 rounded-2xl bg-indigo-600 px-4 py-3 font-semibold text-white hover:bg-indigo-700 disabled:opacity-50 transition"
           >
             <Save size={18} />
-            {saving ? 'Saving...' : 'Save Changes'}
+            {saving ? 'Saving…' : 'Save Changes'}
           </button>
+
+          {/* Divider */}
+          <hr className="border-gray-100 dark:border-zinc-800" />
+
+          {/* ── Theme Section ── */}
+          <div>
+            <div className="flex items-center gap-2 mb-4">
+              <Palette size={18} className="text-indigo-500" />
+              <h2 className="text-base font-semibold text-gray-900 dark:text-white">Appearance</h2>
+            </div>
+
+            <div className="flex items-center justify-between p-4 rounded-2xl bg-gray-50 dark:bg-zinc-800 border border-gray-100 dark:border-zinc-700">
+              <div className="flex items-center gap-3">
+                {darkMode ? <Moon size={20} className="text-indigo-400" /> : <Sun size={20} className="text-amber-500" />}
+                <div>
+                  <p className="text-sm font-medium text-gray-900 dark:text-white">
+                    {darkMode ? 'Dark Mode' : 'Light Mode'}
+                  </p>
+                  <p className="text-xs text-gray-400 dark:text-gray-500">
+                    {darkMode ? 'Switch to light theme' : 'Switch to dark theme'}
+                  </p>
+                </div>
+              </div>
+
+              {/* Toggle switch */}
+              <button
+                onClick={toggleTheme}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors duration-300 focus:outline-none ${
+                  darkMode ? 'bg-indigo-600' : 'bg-gray-300'
+                }`}
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-md transition-transform duration-300 ${
+                    darkMode ? 'translate-x-6' : 'translate-x-1'
+                  }`}
+                />
+              </button>
+            </div>
+          </div>
+
+          {/* Divider */}
+          <hr className="border-gray-100 dark:border-zinc-800" />
 
           {/* Sign Out */}
           <button
             onClick={signOut}
-            className="flex w-full items-center justify-center gap-2 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 font-semibold text-red-600 hover:bg-red-100 dark:border-red-500/20 dark:bg-red-500/10 dark:hover:bg-red-500/20"
+            className="flex w-full items-center justify-center gap-2 rounded-2xl border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 px-4 py-3 font-semibold text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/30 transition"
           >
             <LogOut size={18} />
             Sign Out
