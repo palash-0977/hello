@@ -4,14 +4,8 @@ import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabaseClient'
 import Sidebar from '../components/Sidebar'
 import {
-  Plus,
-  X,
-  Eye,
-  ChevronRight,
-  Image as ImageIcon,
-  Type,
-  Clock,
-  CheckCheck,
+  Plus, X, Eye, ChevronRight, Image as ImageIcon,
+  Type, Clock, CheckCheck, Trash2, EyeOff,
 } from 'lucide-react'
 
 // ─── Types ────────────────────────────────────────────────────
@@ -24,7 +18,7 @@ type StatusItem = {
   bg_color: string
   created_at: string
   expires_at: string
-  views: string[]   // array of viewer user_ids (stored as jsonb)
+  views: string[]
   profile: {
     id: string
     full_name: string | null
@@ -104,36 +98,44 @@ function UserAvatar({ profile, size = 12, ring = false, seen = true }: {
   )
 }
 
-// ─── Status Viewer (full-screen story viewer) ─────────────────
+// ─── Status Viewer ────────────────────────────────────────────
 function StatusViewer({
   group,
   onClose,
   currentUserId,
   onMarkViewed,
+  onDeleted,
+  onHideUser,
 }: {
   group: GroupedStatus
   onClose: () => void
   currentUserId: string
   onMarkViewed: (id: string) => void
+  onDeleted: (id: string) => void
+  onHideUser: (uid: string) => void
 }) {
+  const supabase = createClient()
   const [idx, setIdx] = useState(0)
   const [progress, setProgress] = useState(0)
   const [showViewers, setShowViewers] = useState(false)
+  // Map of uid → display name for viewer list
+  const [viewerNames, setViewerNames] = useState<Record<string, string>>({})
+  const [showMenu, setShowMenu] = useState(false)
   const intervalRef = useRef<NodeJS.Timeout | null>(null)
   const item = group.items[idx]
   const DURATION = 5000
+  const isOwn = group.profile.id === currentUserId
 
+  // Auto-advance progress bar
   useEffect(() => {
     onMarkViewed(item.id)
     setProgress(0)
+    setShowViewers(false)
     intervalRef.current = setInterval(() => {
       setProgress(p => {
         if (p >= 100) {
-          if (idx < group.items.length - 1) {
-            setIdx(i => i + 1)
-          } else {
-            onClose()
-          }
+          if (idx < group.items.length - 1) setIdx(i => i + 1)
+          else onClose()
           return 0
         }
         return p + (100 / (DURATION / 100))
@@ -142,16 +144,42 @@ function StatusViewer({
     return () => { if (intervalRef.current) clearInterval(intervalRef.current) }
   }, [idx])
 
-  const goNext = () => {
-    if (idx < group.items.length - 1) setIdx(i => i + 1)
-    else onClose()
+  // ── Fetch viewer names when panel opens ──────────────────────
+  useEffect(() => {
+    if (!showViewers || !item.views?.length) return
+    const unknownIds = item.views.filter(uid => !viewerNames[uid])
+    if (!unknownIds.length) return
+
+    supabase
+      .from('profiles')
+      .select('id, full_name, username')
+      .in('id', unknownIds)
+      .then(({ data }) => {
+        if (!data) return
+        setViewerNames(prev => {
+          const next = { ...prev }
+          data.forEach(p => {
+            next[p.id] = p.full_name || p.username || p.id
+          })
+          return next
+        })
+      })
+  }, [showViewers, item.id])
+
+  // ── Delete current status item ───────────────────────────────
+  const deleteItem = async () => {
+    await supabase.from('statuses').delete().eq('id', item.id)
+    onDeleted(item.id)
+    if (group.items.length === 1) {
+      onClose()
+    } else if (idx >= group.items.length - 1) {
+      setIdx(i => i - 1)
+    }
+    setShowMenu(false)
   }
 
-  const goPrev = () => {
-    if (idx > 0) setIdx(i => i - 1)
-  }
-
-  const isOwn = group.profile.id === currentUserId
+  const goNext = () => { if (idx < group.items.length - 1) setIdx(i => i + 1); else onClose() }
+  const goPrev = () => { if (idx > 0) setIdx(i => i - 1) }
 
   return (
     <div className="fixed inset-0 z-50 bg-black flex flex-col">
@@ -160,7 +188,7 @@ function StatusViewer({
         {group.items.map((_, i) => (
           <div key={i} className="flex-1 h-0.5 rounded-full bg-white/30 overflow-hidden">
             <div
-              className="h-full bg-white transition-none rounded-full"
+              className="h-full bg-white rounded-full"
               style={{ width: i < idx ? '100%' : i === idx ? `${progress}%` : '0%' }}
             />
           </div>
@@ -176,6 +204,46 @@ function StatusViewer({
           </p>
           <p className="text-white/60 text-xs">{timeAgo(item.created_at)} · {expiresIn(item.expires_at)}</p>
         </div>
+
+        {/* ── Action menu button ── */}
+        <div className="relative">
+          <button
+            onClick={() => setShowMenu(v => !v)}
+            className="text-white/70 hover:text-white p-1 text-lg font-bold leading-none"
+          >
+            ⋮
+          </button>
+          {showMenu && (
+            <div className="absolute right-0 top-8 bg-zinc-800 border border-zinc-700 rounded-2xl overflow-hidden shadow-xl min-w-[160px] z-20">
+              {isOwn && (
+                <button
+                  onClick={deleteItem}
+                  className="w-full flex items-center gap-2 px-4 py-3 text-sm text-red-400 hover:bg-zinc-700 transition"
+                >
+                  <Trash2 size={14} />
+                  Delete this status
+                </button>
+              )}
+              {!isOwn && (
+                <button
+                  onClick={() => { onHideUser(group.profile.id); onClose() }}
+                  className="w-full flex items-center gap-2 px-4 py-3 text-sm text-yellow-400 hover:bg-zinc-700 transition"
+                >
+                  <EyeOff size={14} />
+                  Hide {group.profile.full_name || group.profile.username}
+                </button>
+              )}
+              <button
+                onClick={() => setShowMenu(false)}
+                className="w-full flex items-center gap-2 px-4 py-3 text-sm text-white/50 hover:bg-zinc-700 transition"
+              >
+                <X size={14} />
+                Cancel
+              </button>
+            </div>
+          )}
+        </div>
+
         <button onClick={onClose} className="text-white/70 hover:text-white p-1">
           <X size={22} />
         </button>
@@ -198,8 +266,6 @@ function StatusViewer({
             </p>
           </div>
         )}
-
-        {/* Tap zones */}
         <button className="absolute left-0 top-0 w-1/3 h-full" onClick={goPrev} />
         <button className="absolute right-0 top-0 w-1/3 h-full" onClick={goNext} />
       </div>
@@ -221,7 +287,10 @@ function StatusViewer({
               {item.views.map(uid => (
                 <div key={uid} className="flex items-center gap-2 py-2 border-b border-white/10">
                   <CheckCheck size={14} className="text-indigo-400" />
-                  <span className="text-white/70 text-xs">{uid}</span>
+                  {/* ── Name instead of raw ID ── */}
+                  <span className="text-white/80 text-xs">
+                    {viewerNames[uid] ?? 'Loading…'}
+                  </span>
                 </div>
               ))}
             </div>
@@ -232,7 +301,7 @@ function StatusViewer({
   )
 }
 
-// ─── Compose Modal ────────────────────────────────────────────
+// ─── Compose Modal (unchanged) ────────────────────────────────
 function ComposeModal({ onClose, onPosted, userId }: {
   onClose: () => void
   onPosted: () => void
@@ -257,19 +326,13 @@ function ComposeModal({ onClose, onPosted, userId }: {
   const post = async () => {
     if (tab === 'text' && !text.trim()) return
     if (tab === 'image' && !imageFile) return
-
     setUploading(true)
     const expires = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
-
     try {
       if (tab === 'text') {
         await supabase.from('statuses').insert({
-          user_id: userId,
-          type: 'text',
-          content: text.trim(),
-          bg_color: bgColor,
-          expires_at: expires,
-          views: [],
+          user_id: userId, type: 'text', content: text.trim(),
+          bg_color: bgColor, expires_at: expires, views: [],
         })
       } else if (imageFile) {
         const ext = imageFile.name.split('.').pop()
@@ -278,86 +341,48 @@ function ComposeModal({ onClose, onPosted, userId }: {
         if (upErr) throw upErr
         const { data: urlData } = supabase.storage.from('statuses').getPublicUrl(path)
         await supabase.from('statuses').insert({
-          user_id: userId,
-          type: 'image',
-          image_url: urlData.publicUrl,
-          bg_color: '#000000',
-          expires_at: expires,
-          views: [],
+          user_id: userId, type: 'image', image_url: urlData.publicUrl,
+          bg_color: '#000000', expires_at: expires, views: [],
         })
       }
-      onPosted()
-      onClose()
-    } catch (err) {
-      console.error(err)
-    } finally {
-      setUploading(false)
-    }
+      onPosted(); onClose()
+    } catch (err) { console.error(err) }
+    finally { setUploading(false) }
   }
 
   return (
     <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
       <div className="bg-white dark:bg-zinc-900 rounded-t-3xl sm:rounded-3xl w-full sm:max-w-md shadow-2xl overflow-hidden">
-        {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 dark:border-zinc-800">
           <h2 className="text-base font-semibold text-gray-900 dark:text-white">New Status</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
-            <X size={20} />
-          </button>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"><X size={20} /></button>
         </div>
-
-        {/* Tabs */}
         <div className="flex gap-2 px-5 pt-4">
           {(['text', 'image'] as const).map(t => (
-            <button
-              key={t}
-              onClick={() => setTab(t)}
-              className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium transition ${
-                tab === t
-                  ? 'bg-indigo-600 text-white'
-                  : 'bg-gray-100 dark:bg-zinc-800 text-gray-600 dark:text-gray-300'
-              }`}
-            >
+            <button key={t} onClick={() => setTab(t)}
+              className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium transition ${tab === t ? 'bg-indigo-600 text-white' : 'bg-gray-100 dark:bg-zinc-800 text-gray-600 dark:text-gray-300'}`}>
               {t === 'text' ? <Type size={14} /> : <ImageIcon size={14} />}
               {t === 'text' ? 'Text' : 'Image'}
             </button>
           ))}
         </div>
-
         <div className="px-5 py-4">
           {tab === 'text' ? (
             <>
-              {/* Preview */}
-              <div
-                className="w-full h-48 rounded-2xl flex items-center justify-center mb-4 transition-colors"
-                style={{ backgroundColor: bgColor }}
-              >
-                <p
-                  className="text-center text-xl font-bold px-4 break-words"
-                  style={{ color: TEXT_COLORS[bgColor] || '#fff' }}
-                >
+              <div className="w-full h-48 rounded-2xl flex items-center justify-center mb-4 transition-colors" style={{ backgroundColor: bgColor }}>
+                <p className="text-center text-xl font-bold px-4 break-words" style={{ color: TEXT_COLORS[bgColor] || '#fff' }}>
                   {text || 'Type something…'}
                 </p>
               </div>
-
-              <textarea
-                value={text}
-                onChange={e => setText(e.target.value)}
-                maxLength={200}
+              <textarea value={text} onChange={e => setText(e.target.value)} maxLength={200}
                 placeholder="What's on your mind?"
-                className="w-full rounded-2xl border border-gray-200 dark:border-zinc-700 bg-gray-50 dark:bg-zinc-800 px-4 py-3 text-sm text-gray-900 dark:text-white outline-none focus:border-indigo-400 resize-none h-20 mb-3"
-              />
-
-              {/* Color picker */}
+                className="w-full rounded-2xl border border-gray-200 dark:border-zinc-700 bg-gray-50 dark:bg-zinc-800 px-4 py-3 text-sm text-gray-900 dark:text-white outline-none focus:border-indigo-400 resize-none h-20 mb-3" />
               <p className="text-xs text-gray-400 mb-2">Background color</p>
               <div className="flex flex-wrap gap-2 mb-4">
                 {BG_COLORS.map(c => (
-                  <button
-                    key={c}
-                    onClick={() => setBgColor(c)}
+                  <button key={c} onClick={() => setBgColor(c)}
                     className={`w-7 h-7 rounded-full transition-transform ${bgColor === c ? 'ring-2 ring-indigo-500 ring-offset-2 scale-110' : ''}`}
-                    style={{ backgroundColor: c }}
-                  />
+                    style={{ backgroundColor: c }} />
                 ))}
               </div>
             </>
@@ -366,36 +391,24 @@ function ComposeModal({ onClose, onPosted, userId }: {
               {imagePreview ? (
                 <div className="relative w-full h-56 rounded-2xl overflow-hidden mb-3">
                   <img src={imagePreview} alt="preview" className="w-full h-full object-cover" />
-                  <button
-                    onClick={() => { setImageFile(null); setImagePreview('') }}
-                    className="absolute top-2 right-2 bg-black/60 rounded-full p-1 text-white"
-                  >
-                    <X size={14} />
-                  </button>
+                  <button onClick={() => { setImageFile(null); setImagePreview('') }}
+                    className="absolute top-2 right-2 bg-black/60 rounded-full p-1 text-white"><X size={14} /></button>
                 </div>
               ) : (
-                <button
-                  onClick={() => fileRef.current?.click()}
-                  className="w-full h-56 rounded-2xl border-2 border-dashed border-gray-200 dark:border-zinc-700 flex flex-col items-center justify-center gap-2 text-gray-400 hover:border-indigo-400 transition"
-                >
-                  <ImageIcon size={32} />
-                  <span className="text-sm">Tap to choose image</span>
+                <button onClick={() => fileRef.current?.click()}
+                  className="w-full h-56 rounded-2xl border-2 border-dashed border-gray-200 dark:border-zinc-700 flex flex-col items-center justify-center gap-2 text-gray-400 hover:border-indigo-400 transition">
+                  <ImageIcon size={32} /><span className="text-sm">Tap to choose image</span>
                 </button>
               )}
               <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleImageSelect} />
             </div>
           )}
-
           <div className="flex items-center gap-2 text-xs text-gray-400 mb-4">
-            <Clock size={12} />
-            <span>Status expires in 24 hours</span>
+            <Clock size={12} /><span>Status expires in 24 hours</span>
           </div>
-
-          <button
-            onClick={post}
+          <button onClick={post}
             disabled={uploading || (tab === 'text' && !text.trim()) || (tab === 'image' && !imageFile)}
-            className="w-full rounded-2xl bg-indigo-600 py-3 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition"
-          >
+            className="w-full rounded-2xl bg-indigo-600 py-3 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition">
             {uploading ? 'Posting…' : 'Post Status'}
           </button>
         </div>
@@ -415,6 +428,24 @@ export default function StatusPage() {
   const [loading, setLoading] = useState(true)
   const [showCompose, setShowCompose] = useState(false)
   const [viewingGroup, setViewingGroup] = useState<GroupedStatus | null>(null)
+  // ── Hidden user IDs (persisted in localStorage) ──────────────
+  const [hiddenUsers, setHiddenUsers] = useState<Set<string>>(() => {
+    if (typeof window === 'undefined') return new Set()
+    try {
+      const stored = localStorage.getItem('status_hidden_users')
+      return stored ? new Set(JSON.parse(stored)) : new Set()
+    } catch { return new Set() }
+  })
+
+  const hideUser = (uid: string) => {
+    setHiddenUsers(prev => {
+      const next = new Set(prev).add(uid)
+      localStorage.setItem('status_hidden_users', JSON.stringify([...next]))
+      return next
+    })
+    // Also remove from current list immediately
+    setOtherGroups(prev => prev.filter(g => g.profile.id !== uid))
+  }
 
   useEffect(() => {
     const init = async () => {
@@ -429,7 +460,6 @@ export default function StatusPage() {
         .single()
 
       if (profile) setMyProfile(profile)
-
       await loadStatuses(user.id)
     }
     init()
@@ -437,8 +467,6 @@ export default function StatusPage() {
 
   const loadStatuses = async (userId: string) => {
     setLoading(true)
-
-    // Get people I follow
     const { data: iFollow } = await supabase
       .from('followers')
       .select('following_id')
@@ -447,7 +475,6 @@ export default function StatusPage() {
     const followingIds = iFollow?.map(r => r.following_id) ?? []
     const allIds = [...new Set([...followingIds, userId])]
 
-    // Fetch non-expired statuses
     const { data: statusData } = await supabase
       .from('statuses')
       .select(`
@@ -459,45 +486,43 @@ export default function StatusPage() {
       .order('created_at', { ascending: false })
 
     const items = (statusData || []) as unknown as StatusItem[]
+    setMyStatuses(items.filter(s => s.user_id === userId))
 
-    // My statuses
-    const mine = items.filter(s => s.user_id === userId)
-    setMyStatuses(mine)
-
-    // Others grouped by user
     const otherItems = items.filter(s => s.user_id !== userId)
     const grouped: Record<string, GroupedStatus> = {}
 
     for (const item of otherItems) {
       const uid = item.user_id
-      if (!grouped[uid]) {
-        grouped[uid] = {
-          profile: item.profile,
-          items: [],
-          seen: false,
-        }
-      }
+      // ── Skip hidden users ──
+      if (hiddenUsers.has(uid)) continue
+      if (!grouped[uid]) grouped[uid] = { profile: item.profile, items: [], seen: false }
       grouped[uid].items.push(item)
       if (item.views?.includes(userId)) grouped[uid].seen = true
     }
 
-    // Sort: unseen first
-    const sortedGroups = Object.values(grouped).sort((a, b) =>
-      (a.seen ? 1 : 0) - (b.seen ? 1 : 0)
+    setOtherGroups(
+      Object.values(grouped).sort((a, b) => (a.seen ? 1 : 0) - (b.seen ? 1 : 0))
     )
-
-    setOtherGroups(sortedGroups)
     setLoading(false)
   }
 
   const markViewed = async (statusId: string) => {
     if (!currentUserId) return
-    // Add currentUserId to views array via rpc or manual fetch-update
     const { data } = await supabase.from('statuses').select('views').eq('id', statusId).single()
     if (!data) return
     const views: string[] = data.views || []
     if (views.includes(currentUserId)) return
     await supabase.from('statuses').update({ views: [...views, currentUserId] }).eq('id', statusId)
+  }
+
+  // ── Remove a deleted item from local state ───────────────────
+  const handleDeleted = (deletedId: string) => {
+    setMyStatuses(prev => prev.filter(s => s.id !== deletedId))
+    setOtherGroups(prev =>
+      prev
+        .map(g => ({ ...g, items: g.items.filter(s => s.id !== deletedId) }))
+        .filter(g => g.items.length > 0)
+    )
   }
 
   const myGroup: GroupedStatus | null = myProfile
@@ -507,7 +532,6 @@ export default function StatusPage() {
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-zinc-950 transition-colors">
       <Sidebar />
-
       <main className="sm:ml-[72px] px-4 py-6 pb-24 sm:pb-6">
         <div className="mx-auto max-w-2xl">
           <h1 className="mb-5 text-2xl font-bold text-gray-900 dark:text-white">Status</h1>
@@ -516,15 +540,8 @@ export default function StatusPage() {
           <div className="mb-6">
             <div
               className="flex items-center gap-4 p-4 bg-white dark:bg-zinc-900 rounded-3xl border border-gray-100 dark:border-zinc-800 shadow-sm cursor-pointer hover:border-indigo-200 dark:hover:border-indigo-700 transition"
-              onClick={() => {
-                if (myStatuses.length > 0 && myGroup) {
-                  setViewingGroup(myGroup)
-                } else {
-                  setShowCompose(true)
-                }
-              }}
+              onClick={() => { if (myStatuses.length > 0 && myGroup) setViewingGroup(myGroup); else setShowCompose(true) }}
             >
-              {/* Avatar with + ring */}
               <div className="relative flex-shrink-0">
                 {myProfile && <UserAvatar profile={myProfile} size={14} />}
                 <button
@@ -534,7 +551,6 @@ export default function StatusPage() {
                   <Plus size={11} className="text-white" />
                 </button>
               </div>
-
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-semibold text-gray-900 dark:text-white">My Status</p>
                 <p className="text-xs text-gray-400 mt-0.5">
@@ -543,7 +559,6 @@ export default function StatusPage() {
                     : 'Tap to add a status update'}
                 </p>
               </div>
-
               {myStatuses.length > 0 && (
                 <div className="flex items-center gap-1 text-gray-400">
                   <Eye size={14} />
@@ -565,35 +580,22 @@ export default function StatusPage() {
             </div>
           ) : (
             <div>
-              {/* Unseen */}
               {otherGroups.filter(g => !g.seen).length > 0 && (
                 <>
                   <p className="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-widest mb-3 px-1">Recent</p>
                   <div className="space-y-2 mb-5">
                     {otherGroups.filter(g => !g.seen).map(group => (
-                      <StatusGroupRow
-                        key={group.profile.id}
-                        group={group}
-                        currentUserId={currentUserId!}
-                        onClick={() => setViewingGroup(group)}
-                      />
+                      <StatusGroupRow key={group.profile.id} group={group} currentUserId={currentUserId!} onClick={() => setViewingGroup(group)} />
                     ))}
                   </div>
                 </>
               )}
-
-              {/* Seen */}
               {otherGroups.filter(g => g.seen).length > 0 && (
                 <>
                   <p className="text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-widest mb-3 px-1">Viewed</p>
                   <div className="space-y-2">
                     {otherGroups.filter(g => g.seen).map(group => (
-                      <StatusGroupRow
-                        key={group.profile.id}
-                        group={group}
-                        currentUserId={currentUserId!}
-                        onClick={() => setViewingGroup(group)}
-                      />
+                      <StatusGroupRow key={group.profile.id} group={group} currentUserId={currentUserId!} onClick={() => setViewingGroup(group)} />
                     ))}
                   </div>
                 </>
@@ -603,7 +605,6 @@ export default function StatusPage() {
         </div>
       </main>
 
-      {/* Compose Modal */}
       {showCompose && currentUserId && (
         <ComposeModal
           userId={currentUserId}
@@ -612,13 +613,14 @@ export default function StatusPage() {
         />
       )}
 
-      {/* Status Viewer */}
       {viewingGroup && currentUserId && (
         <StatusViewer
           group={viewingGroup}
           currentUserId={currentUserId}
           onClose={() => { setViewingGroup(null); currentUserId && loadStatuses(currentUserId) }}
           onMarkViewed={markViewed}
+          onDeleted={handleDeleted}
+          onHideUser={hideUser}
         />
       )}
     </div>
@@ -638,7 +640,6 @@ function StatusGroupRow({ group, onClick }: {
       className="w-full flex items-center gap-4 p-4 bg-white dark:bg-zinc-900 rounded-3xl border border-gray-100 dark:border-zinc-800 shadow-sm hover:border-indigo-200 dark:hover:border-indigo-700 transition text-left"
     >
       <UserAvatar profile={group.profile} size={14} ring seen={group.seen} />
-
       <div className="flex-1 min-w-0">
         <p className="text-sm font-semibold text-gray-900 dark:text-white truncate">
           {group.profile.full_name || group.profile.username}
@@ -647,7 +648,6 @@ function StatusGroupRow({ group, onClick }: {
           {group.items.length} update{group.items.length > 1 ? 's' : ''} · {timeAgo(latest.created_at)}
         </p>
       </div>
-
       <ChevronRight size={16} className="text-gray-300 dark:text-zinc-600 flex-shrink-0" />
     </button>
   )
