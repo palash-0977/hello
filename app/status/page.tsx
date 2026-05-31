@@ -251,7 +251,6 @@ function StatusViewer({
       setIdx(i => i + 1)
     } else {
       if (currentGroupIndex < allGroups.length - 1) {
-        const nextGroup = allGroups[currentGroupIndex + 1]
         setAllGroups(prev => prev.map((g, i) => 
           i === currentGroupIndex ? { ...g, lastViewedIndex: idx } : g
         ))
@@ -265,7 +264,6 @@ function StatusViewer({
     if (idx > 0) {
       setIdx(i => i - 1)
     } else if (currentGroupIndex > 0) {
-      const prevGroup = allGroups[currentGroupIndex - 1]
       setAllGroups(prev => prev.map((g, i) => 
         i === currentGroupIndex ? { ...g, lastViewedIndex: idx } : g
       ))
@@ -275,7 +273,6 @@ function StatusViewer({
   useEffect(() => {
     if (idx >= group.items.length) {
       if (currentGroupIndex < allGroups.length - 1) {
-        const nextGroup = allGroups[currentGroupIndex + 1]
         setAllGroups(prev => prev.map((g, i) => 
           i === currentGroupIndex ? { ...g, lastViewedIndex: group.items.length - 1 } : g
         ))
@@ -359,10 +356,9 @@ function StatusViewer({
   return (
     <div 
       className="fixed inset-0 z-50 bg-black flex flex-col"
-      onPressStart={handlePressStart}
-      onPressEnd={handlePressEnd}
       onMouseDown={handlePressStart}
       onMouseUp={handlePressEnd}
+      onMouseLeave={handlePressEnd}
       onTouchStart={handlePressStart}
       onTouchEnd={handlePressEnd}
     >
@@ -559,7 +555,7 @@ function StatusViewer({
   )
 }
 
-// ─── Compose Modal (FIXED - text only, no music blocking) ────────────────────────────────
+// ─── Compose Modal ────────────────────────────────────────────
 function ComposeModal({ onClose, onPosted, userId }: {
   onClose: () => void
   onPosted: () => void
@@ -582,14 +578,12 @@ function ComposeModal({ onClose, onPosted, userId }: {
     let musicTitleFinal = null
     
     try {
-      // Upload music if exists
       if (musicFile) {
         const ext = musicFile.name.split('.').pop() || 'mp3'
         const path = `status-music/${userId}_${Date.now()}.${ext}`
         const { error: upErr } = await supabase.storage.from('status-music').upload(path, musicFile, { upsert: false })
         if (upErr) {
           console.error('Music upload error:', upErr)
-          // Continue without music if upload fails
           musicUrl = null
           musicTitleFinal = null
         } else {
@@ -599,7 +593,6 @@ function ComposeModal({ onClose, onPosted, userId }: {
         }
       }
       
-      // Insert status
       const { error: insertError } = await supabase.from('statuses').insert({
         user_id: userId, 
         type: 'text', 
@@ -618,7 +611,6 @@ function ComposeModal({ onClose, onPosted, userId }: {
         return
       }
       
-      // Close modal and refresh
       onPosted()
       onClose()
     } catch (err) {
@@ -638,14 +630,12 @@ function ComposeModal({ onClose, onPosted, userId }: {
         </div>
         
         <div className="px-5 py-4">
-          {/* Preview */}
           <div className="w-full h-48 rounded-2xl flex items-center justify-center mb-4 transition-colors" style={{ backgroundColor: bgColor }}>
             <p className="text-center text-xl font-bold px-4 break-words" style={{ color: TEXT_COLORS[bgColor] || '#fff' }}>
               {text || 'Type something…'}
             </p>
           </div>
           
-          {/* Text input */}
           <textarea 
             value={text} 
             onChange={e => setText(e.target.value)} 
@@ -654,7 +644,6 @@ function ComposeModal({ onClose, onPosted, userId }: {
             className="w-full rounded-2xl border border-gray-200 dark:border-zinc-700 bg-gray-50 dark:bg-zinc-800 px-4 py-3 text-sm text-gray-900 dark:text-white outline-none focus:border-indigo-400 resize-none h-20 mb-3" 
           />
           
-          {/* Music upload - FIXED with proper button */}
           <div className="mb-4">
             <p className="text-xs text-gray-400 mb-2">Add music (optional)</p>
             {musicFile ? (
@@ -703,7 +692,6 @@ function ComposeModal({ onClose, onPosted, userId }: {
             )}
           </div>
           
-          {/* Background color */}
           <p className="text-xs text-gray-400 mb-2">Background color</p>
           <div className="flex flex-wrap gap-2 mb-4">
             {BG_COLORS.map(c => (
