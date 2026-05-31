@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState, Suspense } from 'react'
 import {
   MessageSquareText,
   UserSearch,
@@ -10,7 +10,9 @@ import Link from 'next/link'
 import { usePathname, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabaseClient'
 
-export default function Sidebar() {
+// ── Inner component that uses useSearchParams ──────────────────
+// Must be wrapped in <Suspense> to avoid build errors
+function SidebarInner() {
   const pathname = usePathname()
   const searchParams = useSearchParams()
   const supabase = createClient()
@@ -18,7 +20,6 @@ export default function Sidebar() {
   const [avatar, setAvatar] = useState('')
   const [initial, setInitial] = useState('Y')
 
-  // Hide mobile nav when inside a chat (chat=1 query param set by ChatWindow)
   const isChatOpen = searchParams.get('chat') === '1'
 
   useEffect(() => {
@@ -51,8 +52,9 @@ export default function Sidebar() {
   const AvatarBubble = ({ size = 'sm' }: { size?: 'sm' | 'md' }) => (
     <Link href="/profile">
       <div
-        className={`${size === 'md' ? 'w-9 h-9' : 'w-8 h-8'
-          } overflow-hidden rounded-full bg-gray-200 dark:bg-zinc-700 flex items-center justify-center text-gray-700 dark:text-gray-200 text-xs font-semibold`}
+        className={`${
+          size === 'md' ? 'w-9 h-9' : 'w-8 h-8'
+        } overflow-hidden rounded-full bg-gray-200 dark:bg-zinc-700 flex items-center justify-center text-gray-700 dark:text-gray-200 text-xs font-semibold`}
       >
         {avatar ? (
           <img src={avatar} alt="Profile" className="h-full w-full object-cover" />
@@ -106,7 +108,9 @@ export default function Sidebar() {
                 key={href}
                 href={href}
                 className={`flex flex-col items-center justify-center gap-1 flex-1 ${
-                  active ? 'text-indigo-600 dark:text-indigo-400' : 'text-gray-500 dark:text-gray-400'
+                  active
+                    ? 'text-indigo-600 dark:text-indigo-400'
+                    : 'text-gray-500 dark:text-gray-400'
                 }`}
               >
                 <Icon size={22} />
@@ -122,5 +126,14 @@ export default function Sidebar() {
         </nav>
       )}
     </>
+  )
+}
+
+// ── Exported Sidebar wraps inner in Suspense ───────────────────
+export default function Sidebar() {
+  return (
+    <Suspense fallback={null}>
+      <SidebarInner />
+    </Suspense>
   )
 }

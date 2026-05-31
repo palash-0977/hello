@@ -8,7 +8,7 @@ import React, {
   memo,
 } from 'react'
 import {
- 
+  Search,
   MoreVertical,
   Send,
   ArrowLeft,
@@ -23,6 +23,7 @@ import {
 import { createClient } from '@/lib/supabaseClient'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
+import { Suspense } from 'react'
 
 type MessageType = 'text' | 'image' | 'file' | 'voice'
 
@@ -216,7 +217,7 @@ const LockedChat = ({ contact }: { contact: Contact }) => (
   </div>
 )
 
-export default function ChatWindow() {
+function ChatWindowInner() {
   const supabase = createClient()
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -383,10 +384,22 @@ export default function ChatWindow() {
             <div className="w-8 h-8 rounded-xl bg-indigo-600 flex items-center justify-center text-white text-xs font-bold">Hello</div>
             <h1 className="text-lg font-semibold text-gray-900 dark:text-white">Messages</h1>
           </div>
-       
+          <button className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors">
+            <MoreVertical size={20} />
+          </button>
         </div>
 
-      
+        <div className="px-3 py-2 border-b border-gray-100 dark:border-zinc-800">
+          <div className="flex items-center gap-2 bg-gray-100 dark:bg-zinc-800 rounded-xl px-3 py-2">
+            <Search size={15} className="text-gray-400 flex-shrink-0" />
+            <input
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Search conversations"
+              className="bg-transparent text-sm text-gray-700 dark:text-gray-200 placeholder-gray-400 outline-none flex-1 min-w-0"
+            />
+          </div>
+        </div>
 
         <div className="flex-1 overflow-y-auto">
           {filteredContacts.length === 0 ? (
@@ -488,7 +501,7 @@ export default function ChatWindow() {
         ) : (
           <div className="hidden sm:flex flex-col flex-1 items-center justify-center text-center px-8 bg-[#efeae2] dark:bg-zinc-950">
             <div className="w-20 h-20 rounded-full bg-white dark:bg-zinc-800 flex items-center justify-center mb-4 shadow-sm">
-              <div className="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center text-white text-lg font-bold">Hello</div>
+              <div className="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center text-white text-lg font-bold">Hi</div>
             </div>
             <h2 className="text-base font-semibold text-gray-700 dark:text-gray-300 mb-1">Hello Messaging</h2>
             <p className="text-sm text-gray-400">Select a conversation to start</p>
@@ -496,5 +509,14 @@ export default function ChatWindow() {
         )}
       </div>
     </div>
+  )
+}
+
+// Wrap in Suspense so useSearchParams does not break static build
+export default function ChatWindow() {
+  return (
+    <Suspense fallback={null}>
+      <ChatWindowInner />
+    </Suspense>
   )
 }
