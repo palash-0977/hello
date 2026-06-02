@@ -11,7 +11,7 @@ import React, {
 } from 'react'
 import {
   Search,
-  MoreVertical,
+  Trash2,
   Send,
   ArrowLeft,
   Check,
@@ -28,7 +28,7 @@ import {
   X,
   Pin,
   EyeOff,
-  Trash2,
+  
   BellOff,
   Reply,
   Edit2,
@@ -515,9 +515,12 @@ function ChatWindowInner() {
 
   const [isRecording, setIsRecording] = useState(false)
   const [recordingSeconds, setRecordingSeconds] = useState(0)
+  const recordingSecondsRef = useRef(0)  // always-fresh mirror of recordingSeconds
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const recordingChunks = useRef<Blob[]>([])
   const recordingTimer = useRef<NodeJS.Timeout | null>(null)
+  const activeContactRef = useRef<Contact | null>(null)
+  const currentUserIdRef = useRef<string | null>(null)
 
   const [uploadingFiles, setUploadingFiles] = useState(false)
   const [previewFiles, setPreviewFiles] = useState<{ file: File; url: string; type: 'image' | 'file' }[]>([])
@@ -558,6 +561,7 @@ function ChatWindowInner() {
   }, [])
 
   const openChat = (contact: Contact) => {
+    activeContactRef.current = contact
     setActiveContact(contact)
     setShowList(false)
     setReplyTo(null)
@@ -583,17 +587,21 @@ function ChatWindowInner() {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) return
       setCurrentUserId(user.id)
+      currentUserIdRef.current = user.id
       const loadedContacts = await loadContacts(user.id)
       await setupPresence(user.id)
       requestNotificationPermission()
 
+      // Handle ?openContact=<id> deep-link from profile page
       const openContactId = searchParams.get('openContact')
       if (openContactId) {
+        // Remove the param from URL immediately so back-navigation is clean
         const params = new URLSearchParams(searchParams.toString())
         params.delete('openContact')
         const qs = params.toString()
         router.replace(`/messages${qs ? `?${qs}` : ''}`, { scroll: false })
 
+        // Find the contact in the already-loaded list, or fetch their profile
         let contact = loadedContacts?.find((c: Contact) => c.id === openContactId) ?? null
         if (!contact) {
           const { data: p } = await supabase
@@ -613,6 +621,7 @@ function ChatWindowInner() {
           }
         }
         if (contact) {
+          activeContactRef.current = contact
           setActiveContact(contact)
           setShowList(false)
           const p2 = new URLSearchParams()
@@ -646,29 +655,32 @@ function ChatWindowInner() {
   }
 
   const setupPresence = async (userId: string) => {
-  if (presenceChannelRef.current) {
-    await supabase.removeChannel(presenceChannelRef.current)
-    presenceChannelRef.current = null
+    // Await removal so Supabase fully deregisters before we reuse the channel name.
+    if (presenceChannelRef.current) {
+      await supabase.removeChannel(presenceChannelRef.current)
+      presenceChannelRef.current = null
+    }
+
+    // All .on() listeners MUST be registered before .subscribe() is called.
+    const ch = supabase.channel('presence:online_users')
+
+    ch.on('presence', { event: 'sync' }, () => {
+      const state = ch.presenceState<{ user_id: string }>()
+      const onlineIds = new Set(
+        Object.values(state).flat().map((p: any) => p.user_id)
+      )
+      setContacts(prev => prev.map(c => ({ ...c, online: onlineIds.has(c.id) })))
+    })
+
+    ch.subscribe(async (status) => {
+      if (status === 'SUBSCRIBED') {
+        await ch.track({ user_id: userId })
+      }
+    })
+
+    presenceChannelRef.current = ch
   }
 
-  const ch = supabase.channel('presence:online_users')
-
-  ch.on('presence', { event: 'sync' }, () => {
-    const state = ch.presenceState<{ user_id: string }>()
-    const onlineIds = new Set(
-      Object.values(state).flat().map((p: any) => p.user_id)
-    )
-    setContacts(prev => prev.map(c => ({ ...c, online: onlineIds.has(c.id) })))
-  })
-
-  ch.subscribe(async (status) => {
-    if (status === 'SUBSCRIBED') {
-      await ch.track({ user_id: userId })
-    }
-  })
-
-  presenceChannelRef.current = ch
-}
   const loadContacts = async (userId: string) => {
     const { data: iFollow } = await supabase.from('followers').select('following_id').eq('follower_id', userId)
     const { data: followsMe } = await supabase.from('followers').select('follower_id').eq('following_id', userId)
@@ -882,13 +894,12 @@ function ChatWindowInner() {
       return
     }
 
+    // Always send content (null for non-text) so NOT NULL columns are satisfied
     const msgData: Record<string, unknown> = {
       sender_id: currentUserId,
       receiver_id: activeContact.id,
       type,
-      read: false,
-      delivered: false,
-      ...(type === 'text' ? { content: input.trim() } : {}),
+      content: type === 'text' ? input.trim() : null,
       ...(replyTo ? {
         reply_to_id: replyTo.id,
         reply_to_content: replyTo.content || `[${replyTo.type}]`,
@@ -898,6 +909,9 @@ function ChatWindowInner() {
     }
 
     const { data, error } = await supabase.from('messages').insert(msgData).select().single()
+    if (error) {
+      console.error('sendMessage insert error:', JSON.stringify(error))
+    }
     if (!error && data) {
       setMessages(prev => [...prev, data as Message])
       setContacts(prev => {
@@ -949,34 +963,93 @@ function ChatWindowInner() {
   }
 
   const startRecording = async () => {
+    // Prevent double-trigger from onMouseDown + onTouchStart on mobile
+    if (mediaRecorderRef.current) return
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      const mr = new MediaRecorder(stream)
+      // Pick the best supported MIME type
+      const mimeType = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4']
+        .find(t => MediaRecorder.isTypeSupported(t)) || ''
+      const mr = new MediaRecorder(stream, mimeType ? { mimeType } : {})
       recordingChunks.current = []
       mr.ondataavailable = e => { if (e.data.size > 0) recordingChunks.current.push(e.data) }
-      mr.start()
+      // Collect data every 250ms so chunks are never empty on stop
+      mr.start(250)
       mediaRecorderRef.current = mr
-      setIsRecording(true)
+      recordingSecondsRef.current = 0
       setRecordingSeconds(0)
-      recordingTimer.current = setInterval(() => setRecordingSeconds(s => s + 1), 1000)
-    } catch {}
+      setIsRecording(true)
+      recordingTimer.current = setInterval(() => {
+        recordingSecondsRef.current += 1
+        setRecordingSeconds(recordingSecondsRef.current)
+      }, 1000)
+    } catch (err) {
+      console.error('Microphone error:', err)
+    }
   }
 
-  const stopRecording = async () => {
-    if (!mediaRecorderRef.current || !currentUserId || !activeContact) return
+  const stopRecording = () => {
+    const mr = mediaRecorderRef.current
+    if (!mr) return
+
+    // Snapshot refs NOW before any async work, so values can't go stale
+    const userId = currentUserIdRef.current
+    const contact = activeContactRef.current
+    const duration = recordingSecondsRef.current
+
+    if (!userId || !contact) {
+      mr.stream.getTracks().forEach(t => t.stop())
+      mediaRecorderRef.current = null
+      setIsRecording(false)
+      if (recordingTimer.current) clearInterval(recordingTimer.current)
+      return
+    }
+
     setIsRecording(false)
     if (recordingTimer.current) clearInterval(recordingTimer.current)
-    const duration = recordingSeconds
-    mediaRecorderRef.current.stop()
-    mediaRecorderRef.current.onstop = async () => {
-      const blob = new Blob(recordingChunks.current, { type: 'audio/webm' })
-      const path = `voice/${currentUserId}_${Date.now()}.webm`
+
+    // Assign onstop BEFORE calling stop() so it's guaranteed to fire
+    mr.onstop = async () => {
+      mediaRecorderRef.current = null
+      const mimeType = mr.mimeType || 'audio/webm'
+      const ext = mimeType.includes('ogg') ? 'ogg' : mimeType.includes('mp4') ? 'mp4' : 'webm'
+      const blob = new Blob(recordingChunks.current, { type: mimeType })
+      if (blob.size === 0) {
+        mr.stream.getTracks().forEach(t => t.stop())
+        return
+      }
+      const path = `voice/${userId}_${Date.now()}.${ext}`
       const { error } = await supabase.storage.from('messages').upload(path, blob)
-      if (error) return
+      mr.stream.getTracks().forEach(t => t.stop())
+      if (error) { console.error('Upload error:', error); return }
       const { data: urlData } = supabase.storage.from('messages').getPublicUrl(path)
-      await sendMessage('voice', { file_url: urlData.publicUrl, duration })
-      mediaRecorderRef.current?.stream.getTracks().forEach(t => t.stop())
+      // content must be present (even as null) if the column is NOT NULL in your schema
+      const msgData = {
+        sender_id: userId,
+        receiver_id: contact.id,
+        type: 'voice' as const,
+        content: null as null,
+        file_url: urlData.publicUrl,
+        duration,
+      }
+      const { data, error: insertError } = await supabase.from('messages').insert(msgData).select().single()
+      if (insertError) console.error('Voice insert error:', JSON.stringify(insertError))
+      if (!insertError && data) {
+        setMessages(prev => [...prev, data as Message])
+        setContacts(prev => {
+          const updated = prev.map(c => c.id === contact.id ? { ...c, lastMessage: data as Message } : c)
+          return updated.sort((a, b) => {
+            if (a.pinned && !b.pinned) return -1
+            if (!a.pinned && b.pinned) return 1
+            const aTime = a.lastMessage ? new Date(a.lastMessage.created_at).getTime() : 0
+            const bTime = b.lastMessage ? new Date(b.lastMessage.created_at).getTime() : 0
+            return bTime - aTime
+          })
+        })
+      }
     }
+
+    mr.stop()
   }
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>, type: 'image' | 'file') => {
@@ -1189,7 +1262,7 @@ function ChatWindowInner() {
               { icon: Pin, label: contactMenuTarget.pinned ? 'Unpin Chat' : 'Pin Chat', action: () => handlePinContact(contactMenuTarget.id) },
               { icon: EyeOff, label: 'Hide Chat', action: () => handleHideContact(contactMenuTarget.id) },
               { icon: BellOff, label: contactMenuTarget.muted ? 'Unmute' : 'Mute', action: () => handleMuteContact(contactMenuTarget.id) },
-             
+            
             ].map(item => (
               <button key={item.label} onClick={item.action}
                 className={`w-full flex items-center gap-3 px-4 py-3 text-sm hover:bg-gray-50 dark:hover:bg-zinc-800 transition-colors ${(item as any).red ? 'text-red-500' : 'text-gray-700 dark:text-gray-200'}`}
@@ -1216,9 +1289,7 @@ function ChatWindowInner() {
               ) : 'Messages'}
             </h1>
           </div>
-          <button className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors">
-            <MoreVertical size={20} />
-          </button>
+        
         </div>
 
         <div className="px-3 py-2 border-b border-gray-100 dark:border-zinc-800">
@@ -1285,6 +1356,7 @@ function ChatWindowInner() {
                   )}
                 </p>
               </div>
+
               <div className="flex items-center gap-1">
                 <button
                   onClick={() => setShowMsgSearch(v => !v)}
@@ -1297,7 +1369,7 @@ function ChatWindowInner() {
                     onClick={() => setShowHeaderMenu(v => !v)}
                     className="p-2 rounded-xl text-gray-400 hover:bg-gray-100 dark:hover:bg-zinc-800 hover:text-gray-600 dark:hover:text-gray-200 transition-colors"
                   >
-                    <MoreVertical size={18} />
+                   
                   </button>
                   {showHeaderMenu && (
                     <div className="absolute right-0 top-10 bg-white dark:bg-zinc-800 border border-gray-100 dark:border-zinc-700 rounded-2xl shadow-xl overflow-hidden min-w-[170px] z-30">
@@ -1467,8 +1539,7 @@ function ChatWindowInner() {
                         </button>
                       ) : (
                         <button
-                          onMouseDown={startRecording}
-                          onTouchStart={startRecording}
+                          onClick={startRecording}
                           className="p-2.5 rounded-full bg-indigo-600 text-white hover:bg-indigo-700 transition-all flex-shrink-0"
                         >
                           <Mic size={16} />

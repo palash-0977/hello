@@ -256,27 +256,7 @@ export default function ProfilePage() {
                 </button>
 
                 {/* Message button */}
-                <button
-                  onClick={openChat}
-                  disabled={!isMutual}
-                  title={
-                    isMutual
-                      ? `Message ${profile.full_name || profile.username}`
-                      : 'Follow each other to chat'
-                  }
-                  className={`flex items-center justify-center gap-2 rounded-2xl px-5 py-3 text-sm font-semibold transition ${
-                    isMutual
-                      ? 'bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800 hover:bg-indigo-100 dark:hover:bg-indigo-900/50'
-                      : 'bg-gray-100 dark:bg-zinc-800 text-gray-400 dark:text-zinc-500 border border-gray-200 dark:border-zinc-700 cursor-not-allowed'
-                  }`}
-                >
-                  {isMutual ? (
-                    <MessageCircle size={16} />
-                  ) : (
-                    <Lock size={16} />
-                  )}
-                  Message
-                </button>
+                
               </div>
             )}
 
