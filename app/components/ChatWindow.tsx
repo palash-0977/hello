@@ -13,6 +13,7 @@ import {
   Search,
   MoreVertical,
   Send,
+  Trash2,
   ArrowLeft,
   Check,
   CheckCheck,
@@ -28,7 +29,6 @@ import {
   X,
   Pin,
   EyeOff,
-  Trash2,
   BellOff,
   Reply,
   Edit2,
@@ -1262,7 +1262,7 @@ function ChatWindowInner() {
               { icon: Pin, label: contactMenuTarget.pinned ? 'Unpin Chat' : 'Pin Chat', action: () => handlePinContact(contactMenuTarget.id) },
               { icon: EyeOff, label: 'Hide Chat', action: () => handleHideContact(contactMenuTarget.id) },
               { icon: BellOff, label: contactMenuTarget.muted ? 'Unmute' : 'Mute', action: () => handleMuteContact(contactMenuTarget.id) },
-              { icon: Trash2, label: 'Remove', action: () => handleDeleteContact(contactMenuTarget.id), red: true },
+          
             ].map(item => (
               <button key={item.label} onClick={item.action}
                 className={`w-full flex items-center gap-3 px-4 py-3 text-sm hover:bg-gray-50 dark:hover:bg-zinc-800 transition-colors ${(item as any).red ? 'text-red-500' : 'text-gray-700 dark:text-gray-200'}`}
