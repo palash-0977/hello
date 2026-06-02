@@ -11,7 +11,7 @@ import React, {
 } from 'react'
 import {
   Search,
-  Trash2,
+  MoreVertical,
   Send,
   ArrowLeft,
   Check,
@@ -28,7 +28,7 @@ import {
   X,
   Pin,
   EyeOff,
-  
+  Trash2,
   BellOff,
   Reply,
   Edit2,
@@ -1262,7 +1262,7 @@ function ChatWindowInner() {
               { icon: Pin, label: contactMenuTarget.pinned ? 'Unpin Chat' : 'Pin Chat', action: () => handlePinContact(contactMenuTarget.id) },
               { icon: EyeOff, label: 'Hide Chat', action: () => handleHideContact(contactMenuTarget.id) },
               { icon: BellOff, label: contactMenuTarget.muted ? 'Unmute' : 'Mute', action: () => handleMuteContact(contactMenuTarget.id) },
-            
+              { icon: Trash2, label: 'Remove', action: () => handleDeleteContact(contactMenuTarget.id), red: true },
             ].map(item => (
               <button key={item.label} onClick={item.action}
                 className={`w-full flex items-center gap-3 px-4 py-3 text-sm hover:bg-gray-50 dark:hover:bg-zinc-800 transition-colors ${(item as any).red ? 'text-red-500' : 'text-gray-700 dark:text-gray-200'}`}
@@ -1289,7 +1289,9 @@ function ChatWindowInner() {
               ) : 'Messages'}
             </h1>
           </div>
-        
+          <button className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors">
+            <MoreVertical size={20} />
+          </button>
         </div>
 
         <div className="px-3 py-2 border-b border-gray-100 dark:border-zinc-800">
@@ -1369,7 +1371,7 @@ function ChatWindowInner() {
                     onClick={() => setShowHeaderMenu(v => !v)}
                     className="p-2 rounded-xl text-gray-400 hover:bg-gray-100 dark:hover:bg-zinc-800 hover:text-gray-600 dark:hover:text-gray-200 transition-colors"
                   >
-                   
+                    <MoreVertical size={18} />
                   </button>
                   {showHeaderMenu && (
                     <div className="absolute right-0 top-10 bg-white dark:bg-zinc-800 border border-gray-100 dark:border-zinc-700 rounded-2xl shadow-xl overflow-hidden min-w-[170px] z-30">
