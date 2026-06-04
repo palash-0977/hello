@@ -13,7 +13,6 @@ import {
   Search,
   MoreVertical,
   Send,
-  Trash2,
   ArrowLeft,
   Check,
   CheckCheck,
@@ -29,6 +28,7 @@ import {
   X,
   Pin,
   EyeOff,
+  Trash2,
   BellOff,
   Reply,
   Edit2,
@@ -478,6 +478,59 @@ const LockedChat = ({ contact }: { contact: Contact }) => (
   </div>
 )
 
+
+// ─── In-App Toast Notification (Instagram-style) ─────────────────────────────
+type ToastNotif = {
+  id: string
+  contactId: string
+  name: string
+  avatar_url: string | null
+  body: string
+  color: string
+}
+
+const AVATAR_COLORS = ['bg-violet-500', 'bg-emerald-500', 'bg-rose-500', 'bg-amber-500', 'bg-indigo-500']
+
+const InAppNotification = memo(({
+  notif,
+  onDismiss,
+  onOpen,
+}: {
+  notif: ToastNotif
+  onDismiss: (id: string) => void
+  onOpen: (contactId: string) => void
+}) => {
+  useEffect(() => {
+    const t = setTimeout(() => onDismiss(notif.id), 4500)
+    return () => clearTimeout(t)
+  }, [notif.id])
+
+  return (
+    <div
+      className="flex items-center gap-3 bg-white dark:bg-zinc-800 border border-gray-100 dark:border-zinc-700 rounded-2xl shadow-2xl px-4 py-3 cursor-pointer hover:shadow-xl transition-all animate-slide-down max-w-[340px] w-full"
+      onClick={() => { onOpen(notif.contactId); onDismiss(notif.id) }}
+    >
+      <div className={`w-10 h-10 rounded-full flex-shrink-0 flex items-center justify-center text-white text-sm font-semibold overflow-hidden ${notif.avatar_url ? '' : notif.color}`}>
+        {notif.avatar_url
+          ? <img src={notif.avatar_url} alt={notif.name} className="w-full h-full object-cover" />
+          : notif.name[0].toUpperCase()
+        }
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-semibold text-gray-900 dark:text-white truncate">{notif.name}</p>
+        <p className="text-xs text-gray-400 truncate">{notif.body}</p>
+      </div>
+      <button
+        onClick={e => { e.stopPropagation(); onDismiss(notif.id) }}
+        className="text-gray-300 dark:text-zinc-600 hover:text-gray-500 dark:hover:text-zinc-400 flex-shrink-0 ml-1"
+      >
+        <X size={14} />
+      </button>
+    </div>
+  )
+})
+InAppNotification.displayName = 'InAppNotification'
+
 function ChatWindowInner() {
   const supabase = createClient()
   const router = useRouter()
@@ -530,6 +583,8 @@ function ChatWindowInner() {
   const [searchMessages, setSearchMessages] = useState<Message[]>([])
   const [showMsgSearch, setShowMsgSearch] = useState(false)
   const [msgSearchQuery, setMsgSearchQuery] = useState('')
+
+  const [toasts, setToasts] = useState<ToastNotif[]>([])
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -639,6 +694,14 @@ function ChatWindowInner() {
     }
   }
 
+  const showInAppToast = (contact: Contact, body: string) => {
+    const color = AVATAR_COLORS[contact.id.charCodeAt(0) % AVATAR_COLORS.length]
+    const id = `${contact.id}-${Date.now()}`
+    setToasts(prev => [...prev.slice(-2), { id, contactId: contact.id, name: contact.nickname || contact.name, avatar_url: contact.avatar_url, body, color }])
+  }
+
+  const dismissToast = (id: string) => setToasts(prev => prev.filter(t => t.id !== id))
+
   const sendBrowserNotification = (title: string, body: string, contactId: string) => {
     if (Notification.permission === 'granted') {
       const n = new Notification(title, {
@@ -655,15 +718,24 @@ function ChatWindowInner() {
   }
 
   const setupPresence = async (userId: string) => {
-    // Await removal so Supabase fully deregisters before we reuse the channel name.
+    // Remove existing tracked channel
     if (presenceChannelRef.current) {
       await supabase.removeChannel(presenceChannelRef.current)
       presenceChannelRef.current = null
     }
 
-    // All .on() listeners MUST be registered before .subscribe() is called.
-    const ch = supabase.channel('presence:online_users')
+    // Purge any stale channels left by hot-reload / StrictMode double-invoke
+    // that share the same topic prefix — Supabase keeps a global registry.
+    const stale = supabase.getChannels().filter(
+      (c: any) => typeof c.topic === 'string' && c.topic.includes('online_users')
+    )
+    await Promise.all(stale.map((c: any) => supabase.removeChannel(c)))
 
+    // Use a unique name per user+session so names never collide across reloads.
+    const channelName = `presence:online_users:${userId}:${Date.now()}`
+    const ch = supabase.channel(channelName)
+
+    // ALL .on() listeners MUST be registered before .subscribe()
     ch.on('presence', { event: 'sync' }, () => {
       const state = ch.presenceState<{ user_id: string }>()
       const onlineIds = new Set(
@@ -833,12 +905,10 @@ function ChatWindowInner() {
         const sender = contacts.find(c => c.id === msg.sender_id)
         if (!sender) return
 
+        const notifBody = msg.type === 'text' ? (msg.content || '') : `Sent a ${msg.type}`
         if (!mutedContacts.includes(msg.sender_id)) {
-          sendBrowserNotification(
-            sender.nickname || sender.name,
-            msg.type === 'text' ? (msg.content || '') : `Sent a ${msg.type}`,
-            msg.sender_id
-          )
+          sendBrowserNotification(sender.nickname || sender.name, notifBody, msg.sender_id)
+          showInAppToast(sender, notifBody)
         }
 
         setContacts(prev => {
@@ -1191,8 +1261,33 @@ function ChatWindowInner() {
 
   return (
     <div className="flex h-full w-full min-w-0 bg-[#f0f2f5] dark:bg-zinc-950">
+      <style>{`
+        @keyframes slide-down {
+          from { opacity: 0; transform: translateY(-16px) scale(0.97); }
+          to   { opacity: 1; transform: translateY(0)     scale(1);    }
+        }
+        .animate-slide-down { animation: slide-down 0.28s cubic-bezier(0.34,1.56,0.64,1) both; }
+      `}</style>
 
       {lightboxUrl && <LightboxViewer url={lightboxUrl} onClose={() => setLightboxUrl(null)} />}
+
+      {/* ── In-app notification toasts ── */}
+      {toasts.length > 0 && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[200] flex flex-col gap-2 items-center pointer-events-none w-full px-4 sm:px-0">
+          {toasts.map(notif => (
+            <div key={notif.id} className="pointer-events-auto w-full sm:w-auto">
+              <InAppNotification
+                notif={notif}
+                onDismiss={dismissToast}
+                onOpen={(contactId) => {
+                  const c = contacts.find(x => x.id === contactId)
+                  if (c) openChat(c)
+                }}
+              />
+            </div>
+          ))}
+        </div>
+      )}
 
       {showHiddenSetup && (
         <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
@@ -1262,7 +1357,7 @@ function ChatWindowInner() {
               { icon: Pin, label: contactMenuTarget.pinned ? 'Unpin Chat' : 'Pin Chat', action: () => handlePinContact(contactMenuTarget.id) },
               { icon: EyeOff, label: 'Hide Chat', action: () => handleHideContact(contactMenuTarget.id) },
               { icon: BellOff, label: contactMenuTarget.muted ? 'Unmute' : 'Mute', action: () => handleMuteContact(contactMenuTarget.id) },
-          
+              { icon: Trash2, label: 'Remove', action: () => handleDeleteContact(contactMenuTarget.id), red: true },
             ].map(item => (
               <button key={item.label} onClick={item.action}
                 className={`w-full flex items-center gap-3 px-4 py-3 text-sm hover:bg-gray-50 dark:hover:bg-zinc-800 transition-colors ${(item as any).red ? 'text-red-500' : 'text-gray-700 dark:text-gray-200'}`}
@@ -1503,10 +1598,9 @@ function ChatWindowInner() {
                       </button>
                     </div>
                   ) : (
-                    <div className="flex items-end gap-2">
-                      <div className="flex gap-1">
-                        <input ref={imageInputRef} type="file" accept="image/*" multiple className="hidden" onChange={e => handleFileSelect(e, 'image')} />
-                        <input ref={fileInputRef} type="file" multiple className="hidden" onChange={e => handleFileSelect(e, 'file')} />
+                    <div className="flex items-end gap-1.5">
+                      {/* Attachment buttons — hidden on very small screens, shown sm+ */}
+                      <div className="hidden sm:flex gap-1 flex-shrink-0">
                         <button
                           onClick={() => imageInputRef.current?.click()}
                           className="p-2.5 rounded-full text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-zinc-700 transition-colors"
@@ -1521,32 +1615,74 @@ function ChatWindowInner() {
                         </button>
                       </div>
 
-                      <div className="flex-1 flex items-center gap-2 bg-white dark:bg-zinc-800 rounded-full px-4 py-2.5 shadow-sm">
+                      <input ref={imageInputRef} type="file" accept="image/*" multiple className="hidden" onChange={e => handleFileSelect(e, 'image')} />
+                      <input ref={fileInputRef} type="file" multiple className="hidden" onChange={e => handleFileSelect(e, 'file')} />
+
+                      {/* Input pill — contains attachment icons on mobile + send/mic inside */}
+                      <div className="flex-1 flex items-center gap-1 bg-white dark:bg-zinc-800 rounded-full px-3 py-2 shadow-sm min-w-0">
+                        {/* Mobile-only attachment buttons inside the pill */}
+                        <div className="flex sm:hidden gap-0.5 flex-shrink-0">
+                          <button
+                            onClick={() => imageInputRef.current?.click()}
+                            className="p-1.5 rounded-full text-gray-400 hover:text-indigo-500 transition-colors"
+                          >
+                            <ImageIcon size={17} />
+                          </button>
+                          <button
+                            onClick={() => fileInputRef.current?.click()}
+                            className="p-1.5 rounded-full text-gray-400 hover:text-indigo-500 transition-colors"
+                          >
+                            <Paperclip size={17} />
+                          </button>
+                        </div>
+
                         <input
                           ref={inputRef}
                           value={input}
                           onChange={handleInputChange}
                           onKeyDown={handleKeyDown}
                           placeholder="Type a message…"
-                          className="flex-1 min-w-0 bg-transparent text-sm text-gray-800 dark:text-gray-100 placeholder-gray-400 outline-none"
+                          className="flex-1 min-w-0 bg-transparent text-sm text-gray-800 dark:text-gray-100 placeholder-gray-400 outline-none px-1"
                         />
+
+                        {/* Send / Mic inside pill on mobile, outside on desktop */}
+                        <div className="sm:hidden flex-shrink-0">
+                          {input.trim() ? (
+                            <button
+                              onClick={() => sendMessage()}
+                              className="p-2 rounded-full bg-indigo-600 text-white hover:bg-indigo-700 transition-all"
+                            >
+                              <Send size={15} />
+                            </button>
+                          ) : (
+                            <button
+                              onClick={startRecording}
+                              className="p-2 rounded-full bg-indigo-600 text-white hover:bg-indigo-700 transition-all"
+                            >
+                              <Mic size={15} />
+                            </button>
+                          )}
+                        </div>
                       </div>
 
-                      {input.trim() ? (
-                        <button
-                          onClick={() => sendMessage()}
-                          className="p-2.5 rounded-full bg-indigo-600 text-white hover:bg-indigo-700 transition-all flex-shrink-0"
-                        >
-                          <Send size={16} />
-                        </button>
-                      ) : (
-                        <button
-                          onClick={startRecording}
-                          className="p-2.5 rounded-full bg-indigo-600 text-white hover:bg-indigo-700 transition-all flex-shrink-0"
-                        >
-                          <Mic size={16} />
-                        </button>
-                      )}
+                      {/* Send / Mic outside pill on desktop only */}
+                      <div className="hidden sm:block flex-shrink-0">
+                        {input.trim() ? (
+                          <button
+                            onClick={() => sendMessage()}
+                            className="p-2.5 rounded-full bg-indigo-600 text-white hover:bg-indigo-700 transition-all"
+                          >
+                            <Send size={16} />
+                          </button>
+                        ) : (
+                          <button
+                            onClick={startRecording}
+                            className="p-2.5 rounded-full bg-indigo-600 text-white hover:bg-indigo-700 transition-all"
+                          >
+                            <Mic size={16} />
+                          </button>
+                        )}
+                      </div>
                     </div>
                   )}
                 </div>
