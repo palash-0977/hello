@@ -7,7 +7,7 @@ const ROUTES = [
   "/",
   "/messages",
   "/status",
-  
+  "/search",
   "/profile",
 ];
 
