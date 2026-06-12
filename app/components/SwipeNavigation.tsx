@@ -7,8 +7,8 @@ const ROUTES = [
   "/",
   "/messages",
   "/status",
-  "/calls",
-  "/settings",
+  
+  "/profile",
 ];
 
 export default function SwipeNavigation({
