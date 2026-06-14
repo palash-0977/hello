@@ -63,114 +63,88 @@ export default function Home() {
   }
 
   return (
-    <main className="relative flex h-screen w-full items-center justify-center overflow-hidden bg-black">
-      {/* Background */}
-      <div className="absolute inset-0 bg-gradient-to-br from-zinc-950 via-black to-zinc-900" />
+  <main className="relative flex h-screen items-center justify-center overflow-hidden bg-[#050505]">
+    {/* Background */}
+    <div className="absolute inset-0">
+      <div className="absolute left-[-10%] top-[-10%] h-[500px] w-[500px] rounded-full bg-violet-600/20 blur-[140px]" />
+      <div className="absolute right-[-10%] bottom-[-10%] h-[500px] w-[500px] rounded-full bg-cyan-500/20 blur-[140px]" />
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(255,255,255,0.04),transparent_70%)]" />
+    </div>
 
-      {/* Main Glow */}
-      <div className="absolute h-[700px] w-[700px] rounded-full bg-white/[0.03] blur-3xl animate-pulse" />
+    {/* Grid */}
+    <div
+      className="absolute inset-0 opacity-[0.04]"
+      style={{
+        backgroundImage: `
+          linear-gradient(rgba(255,255,255,0.1) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255,255,255,0.1) 1px, transparent 1px)
+        `,
+        backgroundSize: "60px 60px",
+      }}
+    />
 
-      {/* Floating Blobs */}
-      <div className="absolute left-20 top-20 h-32 w-32 rounded-full bg-white/[0.04] blur-2xl animate-bounce" />
+    {/* Main Card */}
+    <div className="relative z-10 flex w-[380px] flex-col items-center rounded-[32px] border border-white/10 bg-white/[0.04] px-10 py-12 backdrop-blur-3xl">
+      {/* Logo */}
+      <div className="relative mb-8">
+        <div className="absolute inset-0 rounded-full bg-white/20 blur-2xl" />
 
-      <div
-        className="absolute right-20 bottom-20 h-40 w-40 rounded-full bg-white/[0.03] blur-3xl animate-bounce"
-        style={{ animationDelay: "1s" }}
-      />
-
-      <div
-        className="absolute left-1/3 bottom-10 h-20 w-20 rounded-full bg-white/[0.05] blur-xl animate-bounce"
-        style={{ animationDelay: "2s" }}
-      />
-
-      {/* Stars */}
-      {STARS.map((star, i) => (
-        <span
-          key={i}
-          className="absolute h-1 w-1 rounded-full bg-white/40 animate-pulse"
-          style={{
-            left: star.left,
-            top: star.top,
-            animationDelay: star.delay,
-          }}
-        />
-      ))}
-
-      <div className="relative z-10 flex flex-col items-center">
-        {/* Logo */}
-        <div className="relative mb-8 flex items-center justify-center">
-          <div className="absolute h-40 w-40 rounded-full border border-white/10 animate-spin [animation-duration:8s]" />
-
-          <div className="absolute h-32 w-32 rounded-full border border-white/5 animate-spin [animation-direction:reverse] [animation-duration:5s]" />
-
-          <div className="absolute h-28 w-28 rounded-full bg-white/10 blur-2xl animate-pulse" />
-
-          <div className="relative h-28 w-28 animate-[float_4s_ease-in-out_infinite]">
-            <Image
-              src="/hello_icon.svg"
-              alt="Hello Logo"
-              fill
-              priority
-              className="object-contain drop-shadow-[0_0_35px_rgba(255,255,255,0.35)]"
-            />
-          </div>
-        </div>
-
-        {/* Title */}
-        <h1 className="bg-gradient-to-r from-white via-zinc-200 to-zinc-400 bg-clip-text text-6xl font-extrabold tracking-wide text-transparent">
-          Hello
-        </h1>
-
-        <p className="mt-2 text-xs uppercase tracking-[0.6em] text-zinc-500">
-          Messaging Platform
-        </p>
-
-        {/* Loader */}
-        <div className="mt-10 flex flex-col items-center gap-4">
-          <div className="flex gap-2">
-            <span className="h-3 w-3 rounded-full bg-white animate-bounce" />
-            <span
-              className="h-3 w-3 rounded-full bg-white animate-bounce"
-              style={{ animationDelay: "0.15s" }}
-            />
-            <span
-              className="h-3 w-3 rounded-full bg-white animate-bounce"
-              style={{ animationDelay: "0.3s" }}
-            />
-          </div>
-
-          <p className="text-xs uppercase tracking-[0.25em] text-zinc-500">
-            Loading...
-          </p>
-        </div>
-
-        {/* Footer */}
-        <div className="absolute -bottom-32 flex flex-col items-center">
-          <p className="text-[10px] uppercase tracking-[0.5em] text-zinc-600">
-            Powered By
-          </p>
-
-          <p className="mt-2 bg-gradient-to-r from-white to-zinc-400 bg-clip-text text-sm font-semibold tracking-[0.4em] text-transparent">
-            PROXIMA
-          </p>
-
-          <p className="mt-2 text-[10px] text-zinc-700">
-            Version 1.0.0
-          </p>
+        <div className="relative flex h-28 w-28 items-center justify-center rounded-full border border-white/10 bg-white/[0.03]">
+          <Image
+            src="/hello_icon.svg"
+            alt="Hello"
+            fill
+            priority
+            className="object-contain p-5"
+          />
         </div>
       </div>
 
-      <style jsx>{`
-        @keyframes float {
-          0%,
-          100% {
-            transform: translateY(0px);
-          }
-          50% {
-            transform: translateY(-12px);
-          }
+      {/* Title */}
+      <h1 className="text-5xl font-bold tracking-tight text-white">
+        Hello
+      </h1>
+
+      <p className="mt-2 text-sm text-zinc-400">
+        Fast • Secure • Connected
+      </p>
+
+      {/* Loading Bar */}
+      <div className="mt-10 w-full">
+        <div className="h-1 overflow-hidden rounded-full bg-white/10">
+          <div className="h-full animate-[loading_2s_ease-in-out_infinite] rounded-full bg-gradient-to-r from-violet-500 via-cyan-400 to-violet-500" />
+        </div>
+
+        <p className="mt-4 text-center text-xs tracking-[0.25em] text-zinc-500">
+          INITIALIZING
+        </p>
+      </div>
+
+      {/* Footer */}
+      <div className="mt-10 flex flex-col items-center">
+        <p className="text-[10px] uppercase tracking-[0.4em] text-zinc-600">
+          Powered By
+        </p>
+
+        <p className="mt-2 bg-gradient-to-r from-violet-400 to-cyan-400 bg-clip-text text-sm font-semibold tracking-[0.3em] text-transparent">
+          PROXIMA
+        </p>
+      </div>
+    </div>
+
+    <style jsx>{`
+      @keyframes loading {
+        0% {
+          width: 0%;
         }
-      `}</style>
-    </main>
-  );
+        50% {
+          width: 75%;
+        }
+        100% {
+          width: 100%;
+        }
+      }
+    `}</style>
+  </main>
+)
 }

@@ -33,19 +33,23 @@ import {
   Reply,
   Edit2,
   Copy,
-  Smile,
-  ChevronDown,
-  Phone,
-  Video,
   Download,
   Eye,
   Bell,
+  Camera,
+  File as FileIcon,
+  BarChart2,
+  MapPin,
+  User,
+  Music,
+  CreditCard,
+  ShieldCheck,
 } from 'lucide-react'
 import { createClient } from '@/lib/supabaseClient'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 
-type MessageType = 'text' | 'image' | 'file' | 'voice'
+type MessageType = 'text' | 'image' | 'file' | 'voice' | 'poll'
 
 type Reaction = {
   emoji: string
@@ -71,6 +75,11 @@ type Message = {
   edited?: boolean
   deleted?: boolean
   reactions?: Reaction[]
+  poll_data?: {
+    question: string
+    options: string[]
+    votes: Record<string, string>   // userId -> option index as string
+  }
 }
 
 type Contact = {
@@ -203,6 +212,7 @@ const MessageBubble = memo(({
   onDelete: (msg: Message) => void
   onReact: (msgId: string, emoji: string) => void
   onLightbox: (url: string) => void
+  onVote: (msgId: string, optionIdx: number) => void
 }) => {
   const fromMe = msg.sender_id === currentUserId
   const [showMenu, setShowMenu] = useState(false)
@@ -257,9 +267,54 @@ const MessageBubble = memo(({
 
   const myReaction = msg.reactions?.find(r => r.user_ids.includes(currentUserId))
 
+  function onVote(msgId: string, optionIdx: number): void {
+    // Ensure this is the poll message we're rendering
+    if (msg.id !== msgId) return
+    if (!currentUserId || !msg.poll_data) return
+
+    // Build new votes object (toggle user's vote)
+    const nextVotes: Record<string, string> = { ...(msg.poll_data.votes || {}) }
+    if (String(nextVotes[currentUserId]) === String(optionIdx)) {
+      delete nextVotes[currentUserId]
+    } else {
+      nextVotes[currentUserId] = String(optionIdx)
+    }
+
+    // Optimistically update the local message object so UI updates immediately.
+    // Mutating props is normally discouraged, but here we force a re-render
+    // by toggling a local state so the PollBubble reflects the change immediately.
+    msg.poll_data = { ...msg.poll_data, votes: nextVotes }
+    setShowReactions(v => !v)
+
+    // Persist change to backend (fire-and-forget). Parent component also
+    // updates via its own handler if wired; this is a best-effort fallback.
+    try {
+      const supabase = createClient()
+      supabase
+        .from('messages')
+        .update({
+          poll_data: msg.poll_data as {
+        question: string
+        options: string[]
+        votes: Record<string, string>
+          },
+        })
+        .eq('id', msgId)
+        .then(({ data, error }: { data: any; error: any }) => {
+          if (error) {
+        console.error('Failed to persist poll vote:', error)
+          }
+        }, (err: unknown) => {
+          console.error('Failed to persist poll vote:', err)
+        })
+    } catch (err) {
+      console.error('Poll vote error:', err)
+    }
+  }
+
   return (
     <div
-      className={`flex ${fromMe ? 'justify-end' : 'justify-start'} mb-2 relative group`}
+      className={`flex ${fromMe ? 'justify-end bubble-me' : 'justify-start bubble-them'} mb-2 relative group`}
       style={{ transform: `translateX(${swipeX}px)`, transition: swipeX === 0 ? 'transform 0.2s' : 'none' }}
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
@@ -279,6 +334,14 @@ const MessageBubble = memo(({
           </div>
         )}
 
+        {/* Poll renders standalone outside the bubble */}
+        {msg.type === 'poll' && (
+          <div onContextMenu={e => { e.preventDefault(); setShowMenu(true) }}>
+            <PollBubble msg={msg} currentUserId={currentUserId} fromMe={fromMe} onVote={onVote} />
+          </div>
+        )}
+
+        {msg.type !== 'poll' && (
         <div
           className={`rounded-2xl px-3 py-2 shadow-sm ${fromMe ? 'bg-indigo-600 text-white rounded-br-sm' : 'bg-white dark:bg-zinc-800 text-gray-800 dark:text-gray-100 rounded-bl-sm border border-gray-100 dark:border-zinc-700'}`}
           onContextMenu={e => { e.preventDefault(); setShowMenu(true) }}
@@ -317,6 +380,7 @@ const MessageBubble = memo(({
             )}
           </div>
         </div>
+        )}
 
         {msg.reactions && msg.reactions.filter(r => r.user_ids.length > 0).length > 0 && (
           <div className={`flex flex-wrap gap-1 mt-1 ${fromMe ? 'justify-end' : 'justify-start'}`}>
@@ -339,7 +403,7 @@ const MessageBubble = memo(({
                 <button
                   key={emoji}
                   onClick={() => { onReact(msg.id, emoji); setShowMenu(false) }}
-                  className={`text-lg hover:scale-125 transition-transform ${myReaction?.emoji === emoji ? 'opacity-100 scale-110' : 'opacity-80'}`}
+                  className={`text-lg hover:scale-125 transition-transform emoji-pop ${myReaction?.emoji === emoji ? 'opacity-100 scale-110' : 'opacity-80'}`}
                 >
                   {emoji}
                 </button>
@@ -531,6 +595,398 @@ const InAppNotification = memo(({
 })
 InAppNotification.displayName = 'InAppNotification'
 
+
+// ─── E2E Encryption helpers ───────────────────────────────────────────────────
+const E2E_ALGO = { name: 'AES-GCM', length: 256 }
+
+function deriveRoomKey(userA: string, userB: string): string {
+  // Deterministic shared secret from sorted user IDs — same key for both sides
+  return [userA, userB].sort().join(':')
+}
+
+async function getOrCreateKey(roomSecret: string): Promise<CryptoKey> {
+  const enc = new TextEncoder()
+  const keyMaterial = await crypto.subtle.importKey(
+    'raw', enc.encode(roomSecret.slice(0, 32).padEnd(32, '0')),
+    { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']
+  )
+  return keyMaterial
+}
+
+async function encryptMsg(plaintext: string, key: CryptoKey): Promise<string> {
+  const enc = new TextEncoder()
+  const iv = crypto.getRandomValues(new Uint8Array(12))
+  const cipherBuf = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv }, key, enc.encode(plaintext)
+  )
+  const combined = new Uint8Array(iv.byteLength + cipherBuf.byteLength)
+  combined.set(iv, 0)
+  combined.set(new Uint8Array(cipherBuf), iv.byteLength)
+  return btoa(String.fromCharCode(...combined))
+}
+
+async function decryptMsg(ciphertext: string, key: CryptoKey): Promise<string> {
+  try {
+    const combined = Uint8Array.from(atob(ciphertext), c => c.charCodeAt(0))
+    const iv = combined.slice(0, 12)
+    const data = combined.slice(12)
+    const plainBuf = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data)
+    return new TextDecoder().decode(plainBuf)
+  } catch {
+    return ciphertext // fallback: show as-is if decryption fails
+  }
+}
+
+// ─── Camera capture modal ─────────────────────────────────────────────────────
+function CameraModal({ onCapture, onClose }: {
+  onCapture: (file: File) => void
+  onClose: () => void
+}) {
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const streamRef = useRef<MediaStream | null>(null)
+  const [ready, setReady] = useState(false)
+  const [captured, setCaptured] = useState<string | null>(null)
+
+  useEffect(() => {
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false })
+      .then(stream => {
+        streamRef.current = stream
+        if (videoRef.current) { videoRef.current.srcObject = stream; videoRef.current.play() }
+        setReady(true)
+      })
+      .catch(() => onClose())
+    return () => { streamRef.current?.getTracks().forEach(t => t.stop()) }
+  }, [])
+
+  const snap = () => {
+    if (!videoRef.current || !canvasRef.current) return
+    const v = videoRef.current
+    canvasRef.current.width = v.videoWidth
+    canvasRef.current.height = v.videoHeight
+    canvasRef.current.getContext('2d')!.drawImage(v, 0, 0)
+    setCaptured(canvasRef.current.toDataURL('image/jpeg', 0.92))
+    streamRef.current?.getTracks().forEach(t => t.stop())
+  }
+
+  const sendCapture = () => {
+    if (!canvasRef.current) return
+    canvasRef.current.toBlob(blob => {
+      if (blob) onCapture(new File([blob], `photo_${Date.now()}.jpg`, { type: 'image/jpeg' }))
+    }, 'image/jpeg', 0.92)
+    onClose()
+  }
+
+  return (
+    <div className="fixed inset-0 z-[90] bg-black flex flex-col">
+      <div className="flex items-center justify-between px-4 py-3">
+        <button onClick={onClose} className="text-white/70 hover:text-white"><X size={24} /></button>
+        <p className="text-white text-sm font-medium">Take a photo</p>
+        <div className="w-8" />
+      </div>
+      <div className="flex-1 relative overflow-hidden">
+        {!captured ? (
+          <video ref={videoRef} className="w-full h-full object-cover" muted playsInline />
+        ) : (
+          <img src={captured} alt="captured" className="w-full h-full object-cover" />
+        )}
+        <canvas ref={canvasRef} className="hidden" />
+      </div>
+      <div className="flex items-center justify-center gap-6 py-8">
+        {!captured ? (
+          <button onClick={snap} disabled={!ready}
+            className="w-16 h-16 rounded-full bg-white border-4 border-white/30 disabled:opacity-50 transition-transform active:scale-90 shadow-lg" />
+        ) : (
+          <>
+            <button onClick={() => { setCaptured(null); navigator.mediaDevices.getUserMedia({ video: true }).then(s => { streamRef.current = s; if (videoRef.current) { videoRef.current.srcObject = s; videoRef.current.play() } }) }}
+              className="px-5 py-2.5 rounded-2xl bg-white/20 text-white text-sm font-medium">Retake</button>
+            <button onClick={sendCapture}
+              className="px-5 py-2.5 rounded-2xl bg-indigo-600 text-white text-sm font-semibold">Send</button>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ─── Poll modal ───────────────────────────────────────────────────────────────
+function PollModal({ onSend, onClose }: {
+  onSend: (question: string, options: string[]) => void
+  onClose: () => void
+}) {
+  const [question, setQuestion] = useState('')
+  const [options, setOptions] = useState(['', ''])
+  const [allowMultiple, setAllowMultiple] = useState(false)
+
+  const submit = () => {
+    const opts = options.filter(o => o.trim())
+    if (!question.trim() || opts.length < 2) return
+    onSend(question.trim(), opts)
+    onClose()
+  }
+
+  return (
+    <div className="fixed inset-0 z-[90] bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
+      <div className="bg-white dark:bg-zinc-900 rounded-t-3xl sm:rounded-3xl w-full max-w-sm shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 dark:border-zinc-800 flex-shrink-0">
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
+          <h2 className="text-base font-semibold text-gray-900 dark:text-white">New Poll</h2>
+          <button
+            onClick={submit}
+            disabled={!question.trim() || options.filter(o=>o.trim()).length < 2}
+            className="text-indigo-600 dark:text-indigo-400 text-sm font-semibold disabled:opacity-30"
+          >
+            Send
+          </button>
+        </div>
+
+        <div className="overflow-y-auto flex-1 px-5 py-4 space-y-5">
+          {/* Question */}
+          <div>
+            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Question</p>
+            <textarea
+              value={question}
+              onChange={e => setQuestion(e.target.value)}
+              placeholder="Ask a question…"
+              rows={2}
+              className="w-full rounded-2xl border border-gray-200 dark:border-zinc-700 bg-gray-50 dark:bg-zinc-800 px-4 py-3 text-sm text-gray-900 dark:text-white outline-none focus:border-indigo-400 resize-none"
+            />
+          </div>
+
+          {/* Options */}
+          <div>
+            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Options</p>
+            <div className="space-y-2">
+              {options.map((opt, i) => (
+                <div key={i} className="flex items-center gap-2 group">
+                  <div className="w-7 h-7 rounded-full border-2 border-gray-200 dark:border-zinc-600 flex items-center justify-center flex-shrink-0">
+                    <span className="text-xs text-gray-400 font-medium">{i+1}</span>
+                  </div>
+                  <input
+                    value={opt}
+                    onChange={e => { const o=[...options]; o[i]=e.target.value; setOptions(o) }}
+                    placeholder={`Option ${i+1}`}
+                    className="flex-1 rounded-2xl border border-gray-200 dark:border-zinc-700 bg-gray-50 dark:bg-zinc-800 px-4 py-2.5 text-sm text-gray-900 dark:text-white outline-none focus:border-indigo-400"
+                  />
+                  {options.length > 2 && (
+                    <button
+                      onClick={() => setOptions(options.filter((_,j)=>j!==i))}
+                      className="opacity-0 group-hover:opacity-100 transition-opacity"
+                    >
+                      <X size={15} className="text-gray-400 hover:text-red-400" />
+                    </button>
+                  )}
+                </div>
+              ))}
+              {options.length < 12 && (
+                <button
+                  onClick={() => setOptions([...options,''])}
+                  className="flex items-center gap-2 text-sm text-indigo-600 dark:text-indigo-400 font-medium py-2 hover:opacity-80 transition-opacity"
+                >
+                  <div className="w-7 h-7 rounded-full border-2 border-dashed border-indigo-300 dark:border-indigo-700 flex items-center justify-center">
+                    <span className="text-indigo-400 text-lg leading-none">+</span>
+                  </div>
+                  Add option
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Settings */}
+          <div className="border border-gray-100 dark:border-zinc-800 rounded-2xl overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-3">
+              <div>
+                <p className="text-sm font-medium text-gray-900 dark:text-white">Allow multiple answers</p>
+                <p className="text-xs text-gray-400">Voters can select more than one</p>
+              </div>
+              <button
+                onClick={() => setAllowMultiple(v => !v)}
+                className={`w-11 h-6 rounded-full transition-colors ${allowMultiple ? 'bg-indigo-600' : 'bg-gray-200 dark:bg-zinc-700'}`}
+              >
+                <div className={`w-5 h-5 rounded-full bg-white shadow-sm transition-transform mx-0.5 ${allowMultiple ? 'translate-x-5' : 'translate-x-0'}`} />
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Poll Bubble ──────────────────────────────────────────────────────────────
+const PollBubble = memo(({ msg, currentUserId, fromMe, onVote }: {
+  msg: Message
+  currentUserId: string
+  fromMe: boolean
+  onVote: (msgId: string, optionIdx: number) => void
+}) => {
+  const poll = msg.poll_data
+  if (!poll) return null
+
+  const totalVotes = Object.keys(poll.votes).length
+  const myVoteIdx = poll.votes[currentUserId] !== undefined ? Number(poll.votes[currentUserId]) : null
+
+  const voteCounts = poll.options.map((_, i) =>
+    Object.values(poll.votes).filter(v => Number(v) === i).length
+  )
+  const maxVotes = Math.max(...voteCounts, 1)
+
+  return (
+    <div className={`w-64 sm:w-72 ${fromMe ? 'bg-indigo-600' : 'bg-white dark:bg-zinc-800 border border-gray-100 dark:border-zinc-700'} rounded-2xl overflow-hidden shadow-sm`}>
+      {/* Header */}
+      <div className={`px-4 pt-3 pb-2 flex items-start gap-2 border-b ${fromMe ? 'border-white/20' : 'border-gray-100 dark:border-zinc-700'}`}>
+        <BarChart2 size={16} className={`flex-shrink-0 mt-0.5 ${fromMe ? 'text-indigo-200' : 'text-indigo-500'}`} />
+        <div>
+          <p className={`text-xs font-semibold uppercase tracking-wide ${fromMe ? 'text-indigo-200' : 'text-indigo-500'}`}>Poll</p>
+          <p className={`text-sm font-semibold leading-snug mt-0.5 ${fromMe ? 'text-white' : 'text-gray-900 dark:text-white'}`}>{poll.question}</p>
+        </div>
+      </div>
+
+      {/* Options */}
+      <div className="px-3 py-2 space-y-2">
+        {poll.options.map((option, i) => {
+          const count = voteCounts[i]
+          const pct = totalVotes > 0 ? Math.round((count / totalVotes) * 100) : 0
+          const isMyVote = myVoteIdx === i
+          const hasVoted = myVoteIdx !== null
+
+          return (
+            <button
+              key={i}
+              onClick={() => onVote(msg.id, i)}
+              className="w-full text-left relative group"
+            >
+              <div className={`relative rounded-xl overflow-hidden transition-all ${
+                isMyVote
+                  ? fromMe ? 'ring-2 ring-white/60' : 'ring-2 ring-indigo-500'
+                  : ''
+              }`}>
+                {/* Progress bar background */}
+                <div className={`absolute inset-0 rounded-xl transition-all duration-500 ${
+                  fromMe
+                    ? isMyVote ? 'bg-white/30' : 'bg-white/10'
+                    : isMyVote ? 'bg-indigo-50 dark:bg-indigo-900/30' : 'bg-gray-50 dark:bg-zinc-700/50'
+                }`}
+                  style={{ width: hasVoted ? `${Math.max(pct, 4)}%` : '0%' }}
+                />
+                {/* Content */}
+                <div className="relative flex items-center justify-between px-3 py-2.5 gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    {/* Radio circle */}
+                    <div className={`w-4 h-4 rounded-full border-2 flex-shrink-0 flex items-center justify-center transition-colors ${
+                      isMyVote
+                        ? fromMe ? 'border-white bg-white' : 'border-indigo-600 bg-indigo-600'
+                        : fromMe ? 'border-white/50' : 'border-gray-300 dark:border-zinc-500'
+                    }`}>
+                      {isMyVote && <div className={`w-1.5 h-1.5 rounded-full ${fromMe ? 'bg-indigo-600' : 'bg-white'}`} />}
+                    </div>
+                    <span className={`text-sm truncate ${fromMe ? 'text-white' : 'text-gray-800 dark:text-gray-100'}`}>{option}</span>
+                  </div>
+                  {hasVoted && (
+                    <span className={`text-xs font-semibold flex-shrink-0 ${fromMe ? 'text-white/80' : 'text-gray-500 dark:text-gray-400'}`}>{pct}%</span>
+                  )}
+                </div>
+              </div>
+            </button>
+          )
+        })}
+      </div>
+
+      {/* Footer */}
+      <div className={`px-4 py-2 text-xs ${fromMe ? 'text-indigo-200' : 'text-gray-400'}`}>
+        {totalVotes} vote{totalVotes !== 1 ? 's' : ''} · {myVoteIdx !== null ? 'You voted' : 'Tap to vote'}
+      </div>
+    </div>
+  )
+})
+PollBubble.displayName = 'PollBubble'
+
+// ─── Location modal ────────────────────────────────────────────────────────────
+function LocationModal({ onSend, onClose }: {
+  onSend: (lat: number, lng: number, label: string) => void
+  onClose: () => void
+}) {
+  const [status, setStatus] = useState<'idle'|'loading'|'got'|'error'>('idle')
+  const [coords, setCoords] = useState<{lat:number;lng:number}|null>(null)
+
+  const getLocation = () => {
+    setStatus('loading')
+    navigator.geolocation.getCurrentPosition(
+      pos => { setCoords({lat:pos.coords.latitude,lng:pos.coords.longitude}); setStatus('got') },
+      () => setStatus('error')
+    )
+  }
+
+  useEffect(() => { getLocation() }, [])
+
+  const send = () => {
+    if (!coords) return
+    onSend(coords.lat, coords.lng, 'Current Location')
+    onClose()
+  }
+
+  return (
+    <div className="fixed inset-0 z-[90] bg-black/60 flex items-end sm:items-center justify-center p-4">
+      <div className="bg-white dark:bg-zinc-900 rounded-3xl w-full max-w-sm shadow-2xl p-5 space-y-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-base font-semibold text-gray-900 dark:text-white">Share Location</h2>
+          <button onClick={onClose}><X size={18} className="text-gray-400" /></button>
+        </div>
+        {status === 'loading' && <div className="flex items-center justify-center py-8 gap-2 text-gray-400 text-sm"><div className="w-4 h-4 border-2 border-indigo-300 border-t-indigo-600 rounded-full animate-spin"/>Getting location…</div>}
+        {status === 'got' && coords && (
+          <>
+            <div className="rounded-2xl overflow-hidden bg-gray-100 dark:bg-zinc-800 h-40 flex items-center justify-center">
+              <img src={`https://maps.googleapis.com/maps/api/staticmap?center=${coords.lat},${coords.lng}&zoom=15&size=400x200&markers=color:indigo|${coords.lat},${coords.lng}&key=nokey`}
+                alt="map" className="w-full h-full object-cover"
+                onError={e => { (e.target as HTMLImageElement).style.display='none' }} />
+              <div className="flex flex-col items-center gap-1 text-gray-400">
+                <MapPin size={24} className="text-indigo-500" />
+                <p className="text-xs">{coords.lat.toFixed(5)}, {coords.lng.toFixed(5)}</p>
+              </div>
+            </div>
+            <button onClick={send} className="w-full py-3 rounded-2xl bg-indigo-600 text-white text-sm font-semibold">Send Location</button>
+          </>
+        )}
+        {status === 'error' && <div className="text-center py-6 text-sm text-red-400">Could not get location. Please allow location access.</div>}
+      </div>
+    </div>
+  )
+}
+
+// ─── Payment modal ─────────────────────────────────────────────────────────────
+function PaymentModal({ onSend, onClose, contactName }: {
+  onSend: (amount: number, note: string) => void
+  onClose: () => void
+  contactName: string
+}) {
+  const [amount, setAmount] = useState('')
+  const [note, setNote] = useState('')
+  return (
+    <div className="fixed inset-0 z-[90] bg-black/60 flex items-end sm:items-center justify-center p-4">
+      <div className="bg-white dark:bg-zinc-900 rounded-3xl w-full max-w-sm shadow-2xl p-5 space-y-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-base font-semibold text-gray-900 dark:text-white">Send Payment</h2>
+          <button onClick={onClose}><X size={18} className="text-gray-400" /></button>
+        </div>
+        <p className="text-xs text-gray-400">To: {contactName}</p>
+        <div className="relative">
+          <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 text-sm font-medium">₹</span>
+          <input type="number" value={amount} onChange={e=>setAmount(e.target.value)} placeholder="0.00"
+            className="w-full rounded-2xl border border-gray-200 dark:border-zinc-700 bg-gray-50 dark:bg-zinc-800 pl-8 pr-4 py-2.5 text-sm text-gray-900 dark:text-white outline-none focus:border-indigo-400" />
+        </div>
+        <input value={note} onChange={e=>setNote(e.target.value)} placeholder="Add a note (optional)"
+          className="w-full rounded-2xl border border-gray-200 dark:border-zinc-700 bg-gray-50 dark:bg-zinc-800 px-4 py-2.5 text-sm text-gray-900 dark:text-white outline-none focus:border-indigo-400" />
+        <button onClick={()=>{if(parseFloat(amount)>0){onSend(parseFloat(amount),note);onClose()}}}
+          disabled={!amount || parseFloat(amount)<=0}
+          className="w-full py-3 rounded-2xl bg-green-600 text-white text-sm font-semibold disabled:opacity-40 transition">
+          Send ₹{amount||'0'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 function ChatWindowInner() {
   const supabase = createClient()
   const router = useRouter()
@@ -547,6 +1003,12 @@ function ChatWindowInner() {
   const [showList, setShowList] = useState(true)
 
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null)
+  const [showAttachMenu, setShowAttachMenu] = useState(false)
+  const [showCamera, setShowCamera] = useState(false)
+  const [showPoll, setShowPoll] = useState(false)
+  const [showLocation, setShowLocation] = useState(false)
+  const [showPayment, setShowPayment] = useState(false)
+  const e2eKeyRef = useRef<CryptoKey | null>(null)
   const [replyTo, setReplyTo] = useState<Message | null>(null)
   const [editingMsg, setEditingMsg] = useState<Message | null>(null)
   const [showHeaderMenu, setShowHeaderMenu] = useState(false)
@@ -821,13 +1283,26 @@ function ChatWindowInner() {
     setMessages([])
 
     const fetchMsgs = async () => {
+      // Load E2E key for this conversation
+      if (currentUserId && activeContact) {
+        const secret = deriveRoomKey(currentUserId, activeContact.id)
+        e2eKeyRef.current = await getOrCreateKey(secret)
+      }
+
       const { data } = await supabase
         .from('messages')
         .select('*')
         .or(`and(sender_id.eq.${currentUserId},receiver_id.eq.${activeContact.id}),and(sender_id.eq.${activeContact.id},receiver_id.eq.${currentUserId})`)
         .order('created_at', { ascending: true })
 
-      setMessages((data || []) as Message[])
+      // Decrypt messages
+      const decrypted = await Promise.all((data || []).map(async (m: any) => {
+        if (m.type === 'text' && m.content && e2eKeyRef.current) {
+          try { m = { ...m, content: await decryptMsg(m.content, e2eKeyRef.current) } } catch {}
+        }
+        return m
+      }))
+      setMessages(decrypted as Message[])
       setLoadingMessages(false)
 
       await supabase.from('messages').update({ read: true, delivered: true })
@@ -848,12 +1323,18 @@ function ChatWindowInner() {
         event: 'INSERT', schema: 'public', table: 'messages',
         filter: `receiver_id=eq.${currentUserId}`,
       }, (payload) => {
-        const msg = payload.new as Message
-        if (msg.sender_id === activeContact.id) {
-          setMessages(prev => [...prev, msg])
-          setIsTyping(false)
-          supabase.from('messages').update({ read: true, delivered: true }).eq('id', msg.id)
-        }
+        // async IIFE so await is valid inside a sync Supabase callback
+        ;(async () => {
+          let msg = payload.new as Message
+          if (msg.sender_id === activeContact.id) {
+            if (msg.type === 'text' && msg.content && e2eKeyRef.current) {
+              try { msg = { ...msg, content: await decryptMsg(msg.content, e2eKeyRef.current) } } catch {}
+            }
+            setMessages(prev => [...prev, msg])
+            setIsTyping(false)
+            supabase.from('messages').update({ read: true, delivered: true }).eq('id', msg.id)
+          }
+        })()
       })
       .on('postgres_changes', {
         event: 'UPDATE', schema: 'public', table: 'messages',
@@ -964,12 +1445,19 @@ function ChatWindowInner() {
       return
     }
 
+    // Encrypt text content before storing
+    let textContent: string | null = null
+    if (type === 'text') {
+      const plain = input.trim()
+      textContent = e2eKeyRef.current ? await encryptMsg(plain, e2eKeyRef.current) : plain
+    }
+
     // Always send content (null for non-text) so NOT NULL columns are satisfied
     const msgData: Record<string, unknown> = {
       sender_id: currentUserId,
       receiver_id: activeContact.id,
       type,
-      content: type === 'text' ? input.trim() : null,
+      content: textContent,
       ...(replyTo ? {
         reply_to_id: replyTo.id,
         reply_to_content: replyTo.content || `[${replyTo.type}]`,
@@ -1156,6 +1644,77 @@ function ChatWindowInner() {
     setUploadingFiles(false)
   }
 
+  // ── Send a camera-captured photo ──────────────────────────────────────────
+  const sendCameraPhoto = async (file: File) => {
+    if (!currentUserId || !activeContact) return
+    const ext = 'jpg'
+    const path = `images/${currentUserId}_${Date.now()}.${ext}`
+    const { error } = await supabase.storage.from('messages').upload(path, file)
+    if (error) { console.error(error); return }
+    const { data: urlData } = supabase.storage.from('messages').getPublicUrl(path)
+    await sendMessage('image', { file_url: urlData.publicUrl, file_name: file.name, file_size: formatFileSize(file.size) })
+  }
+
+  // ── Send a poll ────────────────────────────────────────────────────────────
+  const sendPoll = async (question: string, options: string[]) => {
+    if (!currentUserId || !activeContact) return
+    const msgData = {
+      sender_id: currentUserId,
+      receiver_id: activeContact.id,
+      type: 'poll' as const,
+      content: null,
+      poll_data: { question, options, votes: {} },
+    }
+    const { data, error } = await supabase.from('messages').insert(msgData).select().single()
+    if (error) { console.error('Poll insert error:', error); return }
+    if (data) setMessages(prev => [...prev, data as Message])
+  }
+
+  // ── Vote on a poll ─────────────────────────────────────────────────────────
+  const handleVote = async (msgId: string, optionIdx: number) => {
+    if (!currentUserId) return
+    const msg = messages.find(m => m.id === msgId)
+    if (!msg?.poll_data) return
+    const poll = { ...msg.poll_data }
+    // Toggle: clicking own vote removes it
+    if (String(poll.votes[currentUserId]) === String(optionIdx)) {
+      const votes = { ...poll.votes }
+      delete votes[currentUserId]
+      poll.votes = votes
+    } else {
+      poll.votes = { ...poll.votes, [currentUserId]: String(optionIdx) }
+    }
+    // Optimistic update
+    setMessages(prev => prev.map(m => m.id === msgId ? { ...m, poll_data: poll } : m))
+    await supabase.from('messages').update({ poll_data: poll }).eq('id', msgId)
+  }
+
+  // ── Send location ──────────────────────────────────────────────────────────
+  const sendLocation = async (lat: number, lng: number, label: string) => {
+    if (!currentUserId || !activeContact) return
+    const locText = `📍 ${label}\nhttps://maps.google.com/?q=${lat},${lng}`
+    const encrypted = e2eKeyRef.current ? await encryptMsg(locText, e2eKeyRef.current) : locText
+    const msgData = { sender_id: currentUserId, receiver_id: activeContact.id, type: 'text' as const, content: encrypted }
+    const { data, error } = await supabase.from('messages').insert(msgData).select().single()
+    if (!error && data) {
+      const displayed = { ...data as Message, content: locText }
+      setMessages(prev => [...prev, displayed])
+    }
+  }
+
+  // ── Send payment request ────────────────────────────────────────────────────
+  const sendPayment = async (amount: number, note: string) => {
+    if (!currentUserId || !activeContact) return
+    const payText = `💳 Payment Request: ₹${amount}${note ? '\nNote: ' + note : ''}`
+    const encrypted = e2eKeyRef.current ? await encryptMsg(payText, e2eKeyRef.current) : payText
+    const msgData = { sender_id: currentUserId, receiver_id: activeContact.id, type: 'text' as const, content: encrypted }
+    const { data, error } = await supabase.from('messages').insert(msgData).select().single()
+    if (!error && data) {
+      const displayed = { ...data as Message, content: payText }
+      setMessages(prev => [...prev, displayed])
+    }
+  }
+
   const handlePinContact = (contactId: string) => {
     setPinnedContacts(prev => {
       const next = prev.includes(contactId) ? prev.filter(id => id !== contactId) : [...prev, contactId]
@@ -1267,6 +1826,24 @@ function ChatWindowInner() {
           to   { opacity: 1; transform: translateY(0)     scale(1);    }
         }
         .animate-slide-down { animation: slide-down 0.28s cubic-bezier(0.34,1.56,0.64,1) both; }
+
+        @keyframes bubble-in-right {
+          from { opacity: 0; transform: translateX(18px) scale(0.92); }
+          to   { opacity: 1; transform: translateX(0)    scale(1); }
+        }
+        @keyframes bubble-in-left {
+          from { opacity: 0; transform: translateX(-18px) scale(0.92); }
+          to   { opacity: 1; transform: translateX(0)     scale(1); }
+        }
+        .bubble-me  { animation: bubble-in-right 0.22s cubic-bezier(0.34,1.4,0.64,1) both; }
+        .bubble-them{ animation: bubble-in-left  0.22s cubic-bezier(0.34,1.4,0.64,1) both; }
+
+        @keyframes emoji-pop {
+          0%   { transform: scale(0) rotate(-20deg); opacity:0; }
+          70%  { transform: scale(1.25) rotate(5deg); opacity:1; }
+          100% { transform: scale(1)   rotate(0deg); opacity:1; }
+        }
+        .emoji-pop { animation: emoji-pop 0.3s cubic-bezier(0.34,1.56,0.64,1) both; }
       `}</style>
 
       {lightboxUrl && <LightboxViewer url={lightboxUrl} onClose={() => setLightboxUrl(null)} />}
@@ -1438,8 +2015,9 @@ function ChatWindowInner() {
               </button>
               <Avatar contact={activeContact} size={10} showOnline />
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold text-gray-900 dark:text-gray-100 truncate">
+                <p className="text-sm font-semibold text-gray-900 dark:text-gray-100 truncate flex items-center gap-1.5">
                   {activeContact.nickname || activeContact.name}
+                  <ShieldCheck size={13} className="text-green-400 flex-shrink-0" aria-label="End-to-end encrypted" />
                 </p>
                 <p className="text-xs">
                   {isTyping ? (
@@ -1516,7 +2094,7 @@ function ChatWindowInner() {
               <LockedChat contact={activeContact} />
             ) : (
               <>
-                <div className="flex-1 overflow-y-auto min-h-0 px-4 py-4 bg-[#efeae2] dark:bg-zinc-950">
+                <div className="flex-1 overflow-y-auto min-h-0 px-4 py-4 bg-[#efeae2] dark:bg-zinc-950" onClick={() => setShowAttachMenu(false)}>
                   {loadingMessages && (
                     <div className="flex justify-center py-8">
                       <div className="w-6 h-6 border-2 border-indigo-300 border-t-indigo-600 rounded-full animate-spin" />
@@ -1534,6 +2112,7 @@ function ChatWindowInner() {
                       onDelete={handleDeleteMsg}
                       onReact={handleReact}
                       onLightbox={setLightboxUrl}
+                      onVote={handleVote}
                     />
                   ))}
                   {isTyping && <TypingIndicator />}
@@ -1588,6 +2167,51 @@ function ChatWindowInner() {
                 )}
 
                 <div className="sticky bottom-0 flex-shrink-0 bg-[#f0f2f5] dark:bg-zinc-900 border-t border-gray-200 dark:border-zinc-800 px-3 py-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] z-20">
+                  <style>{`
+                    @keyframes attach-item-in {
+                      from { opacity:0; transform:translateY(16px) scale(0.85); }
+                      to   { opacity:1; transform:translateY(0)     scale(1); }
+                    }
+                    .attach-item { animation: attach-item-in 0.22s cubic-bezier(0.34,1.56,0.64,1) both; }
+                  `}</style>
+
+                  {/* Hidden file inputs */}
+                  <input ref={imageInputRef} type="file" accept="image/*" multiple className="hidden" onChange={e => handleFileSelect(e, 'image')} />
+                  <input ref={fileInputRef} type="file" multiple className="hidden" onChange={e => handleFileSelect(e, 'file')} />
+
+                  {/* WhatsApp-style 4x2 grid attachment menu */}
+                  {showAttachMenu && (
+                    <div
+                      className="absolute bottom-[72px] left-0 right-0 mx-3 z-30 attach-item"
+                      onClick={e => e.stopPropagation()}
+                    >
+                      <div className="bg-white dark:bg-zinc-800 rounded-3xl shadow-2xl border border-gray-100 dark:border-zinc-700 p-4 grid grid-cols-4 gap-3">
+                        {[
+                          { icon: Camera,     label: 'Camera',   color: 'bg-purple-500',  delay: '0ms',   action: () => { setShowCamera(true);            setShowAttachMenu(false) } },
+                          { icon: ImageIcon,  label: 'Photo',    color: 'bg-pink-500',    delay: '30ms',  action: () => { imageInputRef.current?.click();  setShowAttachMenu(false) } },
+                          { icon: FileIcon,   label: 'Document', color: 'bg-indigo-500',  delay: '60ms',  action: () => { fileInputRef.current?.click();   setShowAttachMenu(false) } },
+                          { icon: BarChart2,  label: 'Poll',     color: 'bg-orange-500',  delay: '90ms',  action: () => { setShowPoll(true);               setShowAttachMenu(false) } },
+                          { icon: MapPin,     label: 'Location', color: 'bg-green-500',   delay: '120ms', action: () => { setShowLocation(true);           setShowAttachMenu(false) } },
+                          { icon: User,       label: 'Contact',  color: 'bg-teal-500',    delay: '150ms', action: () => setShowAttachMenu(false) },
+                          { icon: Music,      label: 'Audio',    color: 'bg-rose-500',    delay: '180ms', action: () => { fileInputRef.current?.click();   setShowAttachMenu(false) } },
+                          { icon: CreditCard, label: 'Payment',  color: 'bg-emerald-500', delay: '210ms', action: () => { setShowPayment(true);            setShowAttachMenu(false) } },
+                        ].map(item => (
+                          <button
+                            key={item.label}
+                            onClick={item.action}
+                            style={{ animationDelay: item.delay }}
+                            className="attach-item flex flex-col items-center gap-2 group"
+                          >
+                            <div className={`w-14 h-14 rounded-2xl ${item.color} flex items-center justify-center shadow-md group-hover:scale-105 group-active:scale-95 transition-transform`}>
+                              <item.icon size={22} className="text-white" />
+                            </div>
+                            <span className="text-[11px] font-medium text-gray-500 dark:text-gray-400 group-hover:text-gray-700 dark:group-hover:text-gray-200 transition-colors leading-tight text-center">{item.label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   {isRecording ? (
                     <div className="flex items-center gap-3 bg-white dark:bg-zinc-800 rounded-full px-4 py-2.5 shadow-sm">
                       <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
@@ -1599,43 +2223,16 @@ function ChatWindowInner() {
                     </div>
                   ) : (
                     <div className="flex items-end gap-1.5">
-                      {/* Attachment buttons — hidden on very small screens, shown sm+ */}
-                      <div className="hidden sm:flex gap-1 flex-shrink-0">
-                        <button
-                          onClick={() => imageInputRef.current?.click()}
-                          className="p-2.5 rounded-full text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-zinc-700 transition-colors"
-                        >
-                          <ImageIcon size={18} />
-                        </button>
-                        <button
-                          onClick={() => fileInputRef.current?.click()}
-                          className="p-2.5 rounded-full text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-zinc-700 transition-colors"
-                        >
-                          <Paperclip size={18} />
-                        </button>
-                      </div>
+                      {/* Paperclip attach toggle */}
+                      <button
+                        onClick={() => setShowAttachMenu(v => !v)}
+                        className={`p-2.5 rounded-full transition-all duration-200 flex-shrink-0 ${showAttachMenu ? 'bg-indigo-600 text-white rotate-45' : 'text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-zinc-700'}`}
+                      >
+                        <Paperclip size={18} />
+                      </button>
 
-                      <input ref={imageInputRef} type="file" accept="image/*" multiple className="hidden" onChange={e => handleFileSelect(e, 'image')} />
-                      <input ref={fileInputRef} type="file" multiple className="hidden" onChange={e => handleFileSelect(e, 'file')} />
-
-                      {/* Input pill — contains attachment icons on mobile + send/mic inside */}
+                      {/* Input pill */}
                       <div className="flex-1 flex items-center gap-1 bg-white dark:bg-zinc-800 rounded-full px-3 py-2 shadow-sm min-w-0">
-                        {/* Mobile-only attachment buttons inside the pill */}
-                        <div className="flex sm:hidden gap-0.5 flex-shrink-0">
-                          <button
-                            onClick={() => imageInputRef.current?.click()}
-                            className="p-1.5 rounded-full text-gray-400 hover:text-indigo-500 transition-colors"
-                          >
-                            <ImageIcon size={17} />
-                          </button>
-                          <button
-                            onClick={() => fileInputRef.current?.click()}
-                            className="p-1.5 rounded-full text-gray-400 hover:text-indigo-500 transition-colors"
-                          >
-                            <Paperclip size={17} />
-                          </button>
-                        </div>
-
                         <input
                           ref={inputRef}
                           value={input}
@@ -1643,42 +2240,30 @@ function ChatWindowInner() {
                           onKeyDown={handleKeyDown}
                           placeholder="Type a message…"
                           className="flex-1 min-w-0 bg-transparent text-sm text-gray-800 dark:text-gray-100 placeholder-gray-400 outline-none px-1"
+                          onClick={() => setShowAttachMenu(false)}
                         />
-
-                        {/* Send / Mic inside pill on mobile, outside on desktop */}
+                        {/* Mobile send/mic inside pill */}
                         <div className="sm:hidden flex-shrink-0">
                           {input.trim() ? (
-                            <button
-                              onClick={() => sendMessage()}
-                              className="p-2 rounded-full bg-indigo-600 text-white hover:bg-indigo-700 transition-all"
-                            >
+                            <button onClick={() => sendMessage()} className="p-2 rounded-full bg-indigo-600 text-white hover:bg-indigo-700 transition-all">
                               <Send size={15} />
                             </button>
                           ) : (
-                            <button
-                              onClick={startRecording}
-                              className="p-2 rounded-full bg-indigo-600 text-white hover:bg-indigo-700 transition-all"
-                            >
+                            <button onClick={startRecording} className="p-2 rounded-full bg-indigo-600 text-white hover:bg-indigo-700 transition-all">
                               <Mic size={15} />
                             </button>
                           )}
                         </div>
                       </div>
 
-                      {/* Send / Mic outside pill on desktop only */}
+                      {/* Desktop send/mic outside pill */}
                       <div className="hidden sm:block flex-shrink-0">
                         {input.trim() ? (
-                          <button
-                            onClick={() => sendMessage()}
-                            className="p-2.5 rounded-full bg-indigo-600 text-white hover:bg-indigo-700 transition-all"
-                          >
+                          <button onClick={() => sendMessage()} className="p-2.5 rounded-full bg-indigo-600 text-white hover:bg-indigo-700 transition-all">
                             <Send size={16} />
                           </button>
                         ) : (
-                          <button
-                            onClick={startRecording}
-                            className="p-2.5 rounded-full bg-indigo-600 text-white hover:bg-indigo-700 transition-all"
-                          >
+                          <button onClick={startRecording} className="p-2.5 rounded-full bg-indigo-600 text-white hover:bg-indigo-700 transition-all">
                             <Mic size={16} />
                           </button>
                         )}
@@ -1699,6 +2284,33 @@ function ChatWindowInner() {
           </div>
         )}
       </div>
+
+      {/* New modals */}
+      {showCamera && (
+        <CameraModal
+          onCapture={sendCameraPhoto}
+          onClose={() => setShowCamera(false)}
+        />
+      )}
+      {showPoll && (
+        <PollModal
+          onSend={sendPoll}
+          onClose={() => setShowPoll(false)}
+        />
+      )}
+      {showLocation && (
+        <LocationModal
+          onSend={sendLocation}
+          onClose={() => setShowLocation(false)}
+        />
+      )}
+      {showPayment && activeContact && (
+        <PaymentModal
+          onSend={sendPayment}
+          onClose={() => setShowPayment(false)}
+          contactName={activeContact.nickname || activeContact.name}
+        />
+      )}
     </div>
   )
 }
