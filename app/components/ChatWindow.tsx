@@ -1168,7 +1168,7 @@ function ChatWindowInner() {
     if (Notification.permission === 'granted') {
       const n = new Notification(title, {
         body,
-        icon: '/favicon.ico',
+        icon: '/kivo_icon.png',
         tag: contactId,
       })
       n.onclick = () => {
@@ -1972,7 +1972,7 @@ function ChatWindowInner() {
             <input
               value={search}
               onChange={e => handleSearchChange(e.target.value)}
-              placeholder={hiddenPasswordHash ? 'Search or enter password…' : 'Search conversations'}
+              placeholder={hiddenPasswordHash ? 'Search' : 'Search conversations'}
               className="bg-transparent text-sm text-gray-700 dark:text-gray-200 placeholder-gray-400 outline-none flex-1 min-w-0"
             />
             {search && <button onClick={() => setSearch('')}><X size={14} className="text-gray-400" /></button>}
@@ -2279,7 +2279,7 @@ function ChatWindowInner() {
             <div className="w-20 h-20 rounded-full bg-white dark:bg-zinc-800 flex items-center justify-center mb-4 shadow-sm">
               <div className="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center text-white text-lg font-bold">Hi</div>
             </div>
-            <h2 className="text-base font-semibold text-gray-700 dark:text-gray-300 mb-1">Hello Messaging</h2>
+            <h2 className="text-base font-semibold text-gray-700 dark:text-gray-300 mb-1">Kivo Messaging</h2>
             <p className="text-sm text-gray-400">Select a conversation to start</p>
           </div>
         )}

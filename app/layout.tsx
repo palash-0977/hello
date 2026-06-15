@@ -15,12 +15,12 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Hello — Messaging",
+  title: "Kivo — Messaging",
   description: "A modern messaging app",
   icons: {
-    icon: "/hello_icon.svg",
-    shortcut: "/hello_icon.svg",
-    apple: "/hello_icon.svg",
+    icon: "/kivo_icon.png",
+    shortcut: "/kivo_icon.png",
+    apple: "/kivo_icon.png",
   },
 };
 

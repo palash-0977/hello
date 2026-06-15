@@ -16,6 +16,7 @@ import {
   Bell,
   User2,
   Sun,
+  Info,
 } from 'lucide-react'
 
 export default function SettingsPage() {
@@ -129,7 +130,35 @@ export default function SettingsPage() {
 
            
 
-           
+           {/* About */}
+           <Link
+             href="/help"
+             className="flex items-center justify-between rounded-2xl border border-gray-200 dark:border-zinc-700 p-4 hover:bg-gray-50 dark:hover:bg-zinc-800 transition"
+           >
+             <div className="flex items-center gap-4">
+               <div className="h-11 w-11 rounded-xl bg-indigo-100 dark:bg-indigo-900/30 flex items-center justify-center">
+                 <Info
+                   size={20}
+                   className="text-indigo-600 dark:text-indigo-400"
+                 />
+                </div>
+
+                <div>
+                  <p className="font-semibold text-gray-900 dark:text-white">
+                    Help & About
+                  </p>
+
+                  <p className="text-sm text-gray-500">
+                    Learn more about Kivo and how to use it
+                  </p>
+                </div>
+              </div>
+
+              <ChevronRight
+                size={18}
+                className="text-gray-400"
+              />
+            </Link>
             
 
             {/* Theme */}

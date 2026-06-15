@@ -16,8 +16,8 @@ export default function NoInternetScreen({ onRetry }: Props) {
       {/* Logo */}
       <div className="relative mb-6 h-24 w-24 animate-pulse">
         <Image
-          src="/hello_icon.svg"
-          alt="Hello Logo"
+          src="/kivo_icon.png"
+          alt="Kivo Logo"
           fill
           priority
           className="object-contain"
@@ -49,7 +49,7 @@ export default function NoInternetScreen({ onRetry }: Props) {
 
       {/* Bottom */}
       <p className="absolute bottom-8 text-xs text-zinc-600">
-        Hello Messaging
+        Kivo Messaging
       </p>
     </div>
   );

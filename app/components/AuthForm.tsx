@@ -6,6 +6,9 @@ import { useState, useEffect } from 'react'
 import { createClient } from '@/lib/supabaseClient'
 import { CheckCircle2, XCircle, Loader2 } from 'lucide-react'
 
+const MAX_ATTEMPTS = 5
+const LOCK_TIME = 15 * 60 * 1000 // 15 minutes
+
 type AuthFormProps = {
   mode?: 'login' | 'signup'
 }
@@ -20,9 +23,17 @@ export default function AuthForm({ mode = 'login' }: AuthFormProps) {
   const [fullName, setFullName] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [attempts, setAttempts] = useState(0)
+  const [lockUntil, setLockUntil] = useState<number | null>(null)
 
   const [usernameStatus, setUsernameStatus] = useState<'idle' | 'checking' | 'available' | 'taken'>('idle')
   const [suggestions, setSuggestions] = useState<string[]>([])
+
+  const isLocked = lockUntil !== null && Date.now() < lockUntil
+
+  const remainingMinutes = lockUntil
+    ? Math.ceil((lockUntil - Date.now()) / 60000)
+    : 0
 
   useEffect(() => {
     if (mode !== 'signup' || username.trim().length < 3) {
@@ -59,6 +70,19 @@ export default function AuthForm({ mode = 'login' }: AuthFormProps) {
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
+    
+    if (isLocked) {
+      setError(
+        `Too many failed attempts. Try again in ${remainingMinutes} minute(s).`
+      )
+      return
+    }
+
+    if (password.length < 6) {
+      setError('Password must be at least 6 characters long.')
+      return
+    }
+
     if (mode === 'signup' && usernameStatus === 'taken') {
       setError('Please choose a different username.')
       return
@@ -69,6 +93,13 @@ export default function AuthForm({ mode = 'login' }: AuthFormProps) {
 
     try {
       if (mode === 'signup') {
+        // Prevent signup with weak passwords
+        if (password.length < 6) {
+          setError('Password must be at least 6 characters long for signup.')
+          setLoading(false)
+          return
+        }
+
         const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
           email: email.trim(),
           password,
@@ -97,7 +128,24 @@ export default function AuthForm({ mode = 'login' }: AuthFormProps) {
           email: email.trim(),
           password,
         })
-        if (error) throw error
+
+        if (error) {
+          const newAttempts = attempts + 1
+          setAttempts(newAttempts)
+
+          if (newAttempts >= MAX_ATTEMPTS) {
+            setLockUntil(Date.now() + LOCK_TIME)
+            setAttempts(0)
+            throw new Error(
+              'Too many failed login attempts. Account temporarily locked.'
+            )
+          }
+
+          throw error
+        }
+
+        setAttempts(0)
+        setLockUntil(null)
         router.push('/messages')
         router.refresh()
       }
@@ -123,7 +171,7 @@ export default function AuthForm({ mode = 'login' }: AuthFormProps) {
     <div className="w-full max-w-md rounded-3xl bg-white p-8 shadow-xl dark:bg-[#18181b]">
       <div className="mb-8 text-center">
         <div className="inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-indigo-600 text-white text-xl font-bold mb-4">
-          Hello
+          Kivo
         </div>
         <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
           {mode === 'login' ? 'Welcome back' : 'Create account'}
@@ -137,6 +185,12 @@ export default function AuthForm({ mode = 'login' }: AuthFormProps) {
         <div className="mb-4 flex items-center gap-2 rounded-2xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 p-3 text-sm text-red-600 dark:text-red-400">
           <XCircle size={16} className="flex-shrink-0" />
           {error}
+        </div>
+      )}
+
+      {isLocked && (
+        <div className="mb-4 rounded-2xl border border-orange-200 bg-orange-50 p-3 text-sm text-orange-700">
+          Too many failed attempts. Try again in {remainingMinutes} minute(s).
         </div>
       )}
 
@@ -225,17 +279,22 @@ export default function AuthForm({ mode = 'login' }: AuthFormProps) {
           </label>
           <input
             type="password"
-            placeholder="••••••••"
+            placeholder="Minimum 6 characters"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             className={inputClass}
+            minLength={6}
             required
           />
         </div>
 
         <button
           type="submit"
-          disabled={loading || (mode === 'signup' && usernameStatus === 'taken')}
+          disabled={
+            loading ||
+            isLocked ||
+            (mode === 'signup' && usernameStatus === 'taken')
+          }
           className="w-full rounded-2xl bg-indigo-600 py-3 text-sm font-semibold text-white transition hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed mt-2"
         >
           {loading ? (

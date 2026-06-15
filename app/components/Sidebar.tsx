@@ -70,7 +70,7 @@ function SidebarInner() {
       {/* ── Desktop Sidebar ── */}
       <aside className="hidden sm:flex fixed left-0 top-0 h-screen w-[72px] flex-col items-center py-5 border-r border-gray-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 z-50 transition-colors">
         <Link href="/" className="mb-8 text-xl font-bold text-gray-900 dark:text-white">
-          Hello
+          Kivo
         </Link>
 
         <nav className="flex flex-col items-center gap-2 flex-1">
